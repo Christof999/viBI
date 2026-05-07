@@ -23,7 +23,36 @@ export interface HelperStatus {
   error?: string;
 }
 
-export type Phase = "onboarding" | "modeling" | "design";
+export type Phase = "onboarding" | "library" | "modeling" | "design";
+
+export interface LibraryProject {
+  id: string;
+  name: string;
+  fileName: string;
+  pbipPath: string;
+  goal: string;
+  ci: CIConfig;
+  kpis: string[];
+  createdAt: string;
+  lastOpenedAt: string;
+}
+
+export interface CIPreset {
+  id: string;
+  name: string;
+  ci: CIConfig;
+  createdAt: string;
+}
+
+export interface Library {
+  projects: LibraryProject[];
+  ciPresets: CIPreset[];
+  file?: string;
+}
+
+export type LocateResult =
+  | { ok: true; pbipPath: string; via: "saved" | "search" }
+  | { ok: false; reason: "not_found"; searched: string[] };
 
 export type ReportType = "report" | "paginated";
 
@@ -64,6 +93,7 @@ export interface AppState {
   phase: Phase;
   project?: ProjectConfig;
   pbipPath?: string;
+  libraryId?: string;
   snippets: HtmlSnippet[];
 }
 

@@ -2,7 +2,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { helper } from "../lib/helperClient";
 import { sanitizeFileName } from "../lib/storage";
-import type { CIConfig, HelperStatus, ProjectConfig, ReportType } from "../types";
+import type {
+  CIConfig,
+  CIPreset,
+  HelperStatus,
+  ProjectConfig,
+  ReportType,
+} from "../types";
 
 interface Props {
   onFinish: (project: ProjectConfig) => void;
@@ -472,6 +478,16 @@ function CIStep({
   value: CIConfig;
   onChange: (v: CIConfig) => void;
 }) {
+  const [presets, setPresets] = useState<CIPreset[]>([]);
+  const [presetSaving, setPresetSaving] = useState(false);
+
+  useEffect(() => {
+    helper
+      .library()
+      .then((l) => setPresets(l.ciPresets))
+      .catch(() => setPresets([]));
+  }, []);
+
   const onLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -484,9 +500,65 @@ function CIStep({
   const setColor = (k: keyof CIConfig["colors"], v: string) =>
     onChange({ ...value, colors: { ...value.colors, [k]: v } });
 
+  const loadPreset = (id: string) => {
+    const p = presets.find((x) => x.id === id);
+    if (p) onChange(p.ci);
+  };
+
+  const savePreset = async () => {
+    const name = prompt("Name für dieses CI-Preset?");
+    if (!name) return;
+    setPresetSaving(true);
+    try {
+      const r = await helper.saveCIPreset(name, value);
+      setPresets((ps) => [r.preset, ...ps.filter((p) => p.id !== r.preset.id)]);
+    } catch (e) {
+      alert(`Konnte Preset nicht speichern: ${(e as Error).message}`);
+    } finally {
+      setPresetSaving(false);
+    }
+  };
+
   return (
     <div>
       <StepHeader title="Corporate Identity" sub="Logo, Farben und Schriftart deines Berichts." />
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginBottom: 16,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        {presets.length > 0 && (
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value) loadPreset(e.target.value);
+              e.target.value = "";
+            }}
+            style={{
+              background: "var(--panel-2)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontSize: 12,
+            }}
+          >
+            <option value="">Preset laden…</option>
+            {presets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <button onClick={savePreset} disabled={presetSaving} style={{ fontSize: 12 }}>
+          {presetSaving ? "Speichere…" : "Aktuelle CI als Preset speichern"}
+        </button>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 20 }}>
         <div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>Logo</div>

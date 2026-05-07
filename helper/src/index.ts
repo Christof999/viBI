@@ -5,6 +5,16 @@ import { join } from "node:path";
 import express from "express";
 import { mcpRegistry } from "./mcp.js";
 import { readMetadata, writePBIP } from "./pbip.js";
+import {
+  libraryPath,
+  loadLibrary,
+  locateProject,
+  removeCIPreset,
+  removeProject,
+  setProjectPath,
+  upsertCIPreset,
+  upsertProject,
+} from "./library.js";
 
 const PORT = Number(process.env.PORT ?? 7321);
 const CORS_ORIGIN =
@@ -98,10 +108,65 @@ app.post("/project/create", (req, res) => {
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
     const projectDir = join(targetDir, project.fileName ?? project.name);
     const path = writePBIP(projectDir, project);
-    res.json({ ok: true, path });
+    const entry = upsertProject({
+      name: project.name,
+      fileName: project.fileName ?? project.name,
+      pbipPath: path,
+      goal: project.goal ?? "",
+      ci: project.ci,
+      kpis: project.kpis ?? [],
+    });
+    res.json({ ok: true, path, libraryId: entry.id });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// --- Library --------------------------------------------------------------
+
+app.get("/library", (_req, res) => {
+  res.json({ ...loadLibrary(), file: libraryPath() });
+});
+
+app.post("/library/projects/:id/locate", (req, res) => {
+  res.json(locateProject(req.params.id));
+});
+
+app.post("/library/projects/:id/path", (req, res) => {
+  const { pbipPath } = req.body ?? {};
+  if (typeof pbipPath !== "string" || !pbipPath) {
+    res.status(400).json({ ok: false, error: "pbipPath erforderlich" });
+    return;
+  }
+  if (!existsSync(pbipPath)) {
+    res.status(404).json({ ok: false, error: "Datei existiert nicht" });
+    return;
+  }
+  const updated = setProjectPath(req.params.id, pbipPath);
+  if (!updated) {
+    res.status(404).json({ ok: false, error: "Projekt nicht gefunden" });
+    return;
+  }
+  res.json({ ok: true, project: updated });
+});
+
+app.delete("/library/projects/:id", (req, res) => {
+  const ok = removeProject(req.params.id);
+  res.status(ok ? 200 : 404).json({ ok });
+});
+
+app.post("/library/ci-presets", (req, res) => {
+  const { name, ci, id } = req.body ?? {};
+  if (typeof name !== "string" || !ci) {
+    res.status(400).json({ ok: false, error: "name und ci erforderlich" });
+    return;
+  }
+  res.json({ ok: true, preset: upsertCIPreset(name, ci, id) });
+});
+
+app.delete("/library/ci-presets/:id", (req, res) => {
+  const ok = removeCIPreset(req.params.id);
+  res.status(ok ? 200 : 404).json({ ok });
 });
 
 app.post("/project/metadata", (req, res) => {

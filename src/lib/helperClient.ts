@@ -1,4 +1,13 @@
-import type { HelperStatus, MCPTool, ProjectConfig } from "../types";
+import type {
+  CIConfig,
+  CIPreset,
+  HelperStatus,
+  Library,
+  LibraryProject,
+  LocateResult,
+  MCPTool,
+  ProjectConfig,
+} from "../types";
 
 const HELPER_URL =
   (import.meta.env.VITE_HELPER_URL as string | undefined) ??
@@ -42,11 +51,46 @@ export const helper = {
   createProject(
     project: ProjectConfig,
     targetDir: string
-  ): Promise<{ ok: boolean; path: string }> {
+  ): Promise<{ ok: boolean; path: string; libraryId: string }> {
     return req("/project/create", {
       method: "POST",
       body: JSON.stringify({ project, targetDir }),
     });
+  },
+
+  library(): Promise<Library> {
+    return req<Library>("/library");
+  },
+
+  locateProject(id: string): Promise<LocateResult> {
+    return req<LocateResult>(`/library/projects/${encodeURIComponent(id)}/locate`, {
+      method: "POST",
+    });
+  },
+
+  setProjectPath(
+    id: string,
+    pbipPath: string
+  ): Promise<{ ok: boolean; project?: LibraryProject; error?: string }> {
+    return req(`/library/projects/${encodeURIComponent(id)}/path`, {
+      method: "POST",
+      body: JSON.stringify({ pbipPath }),
+    });
+  },
+
+  removeProject(id: string): Promise<{ ok: boolean }> {
+    return req(`/library/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
+  saveCIPreset(name: string, ci: CIConfig, id?: string): Promise<{ ok: boolean; preset: CIPreset }> {
+    return req("/library/ci-presets", {
+      method: "POST",
+      body: JSON.stringify({ name, ci, id }),
+    });
+  },
+
+  removeCIPreset(id: string): Promise<{ ok: boolean }> {
+    return req(`/library/ci-presets/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
 
   readProjectMetadata(pbipPath: string): Promise<{

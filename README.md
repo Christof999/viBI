@@ -18,6 +18,19 @@ mit lokalem Windows-Helper für PowerBI Desktop, Dateisystem und MCP-Server-Anbi
 3. **Übergang** – Klick auf „Modell fertig" liest Metadaten aus dem PBIP, schließt PBI Desktop
 4. **Design-Phase** – Snippet-Liste, Live-HTML-Preview im sandboxed iframe, „Kopieren für HTML-Visual"
 
+## Bibliothek (lokal auf dem User-PC)
+
+Der Helper persistiert in `~/.vibi/library.json`:
+
+- **Berichte** – jeder per Wizard erzeugte PBIP wird automatisch registriert (Pfad, CI, KPIs, Ziel, `lastOpenedAt`)
+- **CI-Presets** – im Onboarding speicherbar und in späteren Berichten ladbar
+
+Beim erneuten Öffnen sucht der Helper nach 3-stufiger Strategie:
+
+1. gespeicherter `pbipPath` existiert noch → direkt öffnen
+2. depth-limited Suche nach `<Name>.pbip` in `Documents`, `OneDrive\Documents`, `Desktop`, `C:\PowerBI` (registry wird mit gefundenem Pfad aktualisiert)
+3. Fallback: Frontend fragt User per `prompt()` nach manuellem Pfad → wird im Anschluss in der Library gespeichert
+
 ## Architektur
 
 ```

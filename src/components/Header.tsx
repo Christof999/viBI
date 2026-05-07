@@ -7,15 +7,17 @@ interface Props {
   project?: ProjectConfig;
   phase: Phase;
   onRestart: () => void;
+  onLibrary?: () => void;
 }
 
 const PHASE_LABEL: Record<Phase, string> = {
   onboarding: "Setup",
+  library: "Bibliothek",
   modeling: "Datenmodell",
   design: "Design",
 };
 
-export function Header({ status, onRefresh, project, phase, onRestart }: Props) {
+export function Header({ status, onRefresh, project, phase, onRestart, onLibrary }: Props) {
   const ok = status?.ok === true;
   return (
     <motion.header
@@ -67,6 +69,9 @@ export function Header({ status, onRefresh, project, phase, onRestart }: Props) 
         <StatusPill label="Fabric MCP" ok={!!status?.mcp?.fabric} dim={!ok} />
         <StatusPill label="Custom MCP" ok={!!status?.mcp?.custom} dim={!ok} />
         <button onClick={onRefresh}>↻</button>
+        {onLibrary && phase !== "library" && (
+          <button onClick={onLibrary}>Bibliothek</button>
+        )}
         <button onClick={onRestart}>Reset</button>
       </div>
     </motion.header>
@@ -75,7 +80,9 @@ export function Header({ status, onRefresh, project, phase, onRestart }: Props) 
 
 function PhaseDots({ phase }: { phase: Phase }) {
   const order: Phase[] = ["onboarding", "modeling", "design"];
-  const idx = order.indexOf(phase);
+  // 'library' is orthogonal to the linear flow – treat it as before-modeling
+  const effective: Phase = phase === "library" ? "onboarding" : phase;
+  const idx = order.indexOf(effective);
   return (
     <div style={{ display: "flex", gap: 6, marginLeft: 16 }}>
       {order.map((p, i) => (

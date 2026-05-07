@@ -2,13 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { DesignPanel } from "./components/DesignPanel";
 import { Header } from "./components/Header";
+import { LibraryScreen } from "./components/Library";
 import { ModelingPanel } from "./components/ModelingPanel";
 import { Onboarding } from "./components/Onboarding";
 import { useChat } from "./hooks/useChat";
 import { helper } from "./lib/helperClient";
 import { makeStarterSnippets } from "./lib/snippets";
 import { loadState, resetState, saveState } from "./lib/storage";
-import type { AppState, HelperStatus, HtmlSnippet, MCPTool, ProjectConfig } from "./types";
+import type {
+  AppState,
+  HelperStatus,
+  HtmlSnippet,
+  LibraryProject,
+  MCPTool,
+  ProjectConfig,
+} from "./types";
 
 const DEFAULT_TARGET_DIR =
   (import.meta.env.VITE_DEFAULT_PBIP_DIR as string | undefined) ??
@@ -19,6 +27,7 @@ export default function App() {
   const [status, setStatus] = useState<HelperStatus | null>(null);
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [busy, setBusy] = useState(false);
+  const [bootChecked, setBootChecked] = useState(false);
   const chat = useChat(tools);
 
   useEffect(() => {
@@ -37,6 +46,7 @@ export default function App() {
     } else {
       setTools([]);
     }
+    return s;
   }, []);
 
   useEffect(() => {
@@ -45,14 +55,49 @@ export default function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
+  // First boot decision: if user has projects in the helper library and no
+  // current project, show library instead of onboarding.
+  useEffect(() => {
+    if (bootChecked) return;
+    if (state.project) {
+      setBootChecked(true);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const s = await refresh();
+      if (cancelled) return;
+      if (s.ok) {
+        try {
+          const lib = await helper.library();
+          if (!cancelled && lib.projects.length > 0) {
+            setState((st) => ({ ...st, phase: "library" }));
+          }
+        } catch {
+          /* fall through to onboarding */
+        }
+      }
+      if (!cancelled) setBootChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bootChecked, refresh, state.project]);
+
   const onOnboardingFinish = async (project: ProjectConfig) => {
     setBusy(true);
     setState((s) => ({ ...s, project }));
     try {
-      const { path } = await helper.createProject(project, DEFAULT_TARGET_DIR);
-      setState((s) => ({ ...s, project, pbipPath: path, phase: "modeling" }));
+      const r = await helper.createProject(project, DEFAULT_TARGET_DIR);
+      setState((s) => ({
+        ...s,
+        project,
+        pbipPath: r.path,
+        libraryId: r.libraryId,
+        phase: "modeling",
+      }));
       try {
-        await helper.openPowerBIDesktop(path);
+        await helper.openPowerBIDesktop(r.path);
       } catch {
         /* user can open manually */
       }
@@ -71,7 +116,6 @@ export default function App() {
     if (!state.project) return;
     setBusy(true);
     try {
-      // Try to read metadata back from the PBIP folder
       if (state.pbipPath) {
         try {
           await helper.readProjectMetadata(state.pbipPath);
@@ -91,6 +135,29 @@ export default function App() {
     }
   };
 
+  const openLibraryProject = (p: LibraryProject) => {
+    const project: ProjectConfig = {
+      name: p.name,
+      fileName: p.fileName,
+      reportType: "report",
+      goal: p.goal,
+      ci: p.ci,
+      kpis: p.kpis,
+      createdAt: p.createdAt,
+    };
+    setState({
+      phase: "modeling",
+      project,
+      pbipPath: p.pbipPath,
+      libraryId: p.id,
+      snippets: [],
+    });
+  };
+
+  const goToLibrary = () => setState((s) => ({ ...s, phase: "library" }));
+  const startNew = () =>
+    setState({ phase: "onboarding", snippets: [], project: undefined });
+
   const addSnippet = (s: HtmlSnippet) =>
     setState((st) => ({ ...st, snippets: [...st.snippets, s] }));
   const updateSnippet = (s: HtmlSnippet) =>
@@ -102,10 +169,46 @@ export default function App() {
     setState((st) => ({ ...st, snippets: st.snippets.filter((x) => x.id !== id) }));
 
   const restart = () => {
-    if (!confirm("Onboarding zurücksetzen und alle lokal gespeicherten Daten löschen?")) return;
+    if (!confirm("Zurück zur Bibliothek? Aktuelle Sitzung wird verworfen (Berichte bleiben erhalten).")) return;
     resetState();
     location.reload();
   };
+
+  if (!bootChecked) {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          display: "grid",
+          placeItems: "center",
+          color: "var(--muted)",
+        }}
+      >
+        Lade…
+      </div>
+    );
+  }
+
+  if (state.phase === "library") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+        <Header
+          status={status}
+          onRefresh={refresh}
+          project={state.project}
+          phase={state.phase}
+          onRestart={restart}
+          onLibrary={goToLibrary}
+        />
+        <LibraryScreen
+          helperOnline={status?.ok === true}
+          onOpen={openLibraryProject}
+          onNew={startNew}
+          onClose={state.project ? () => setState((s) => ({ ...s, phase: "modeling" })) : undefined}
+        />
+      </div>
+    );
+  }
 
   if (state.phase === "onboarding" || !state.project) {
     return <Onboarding onFinish={onOnboardingFinish} />;
@@ -119,6 +222,7 @@ export default function App() {
         project={state.project}
         phase={state.phase}
         onRestart={restart}
+        onLibrary={goToLibrary}
       />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {state.phase === "modeling" && (
