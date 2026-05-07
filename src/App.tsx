@@ -75,10 +75,17 @@ export default function App() {
         : "") +
       `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
-      `- read_pbip_metadata({pbipPath}): liest die geladenen Tabellen + Spalten + Datentypen aus dem PBIP. Wenn der User "verbinde dich mit dem Bericht" oder "schau in den Bericht" sagt, RUFE DIESES TOOL AUF mit dem oben genannten PBIP-Pfad. Behaupte NIEMALS, du könntest dich nicht verbinden, solange das Tool verfügbar ist.\n` +
-      `- locate_pbip({name?}): findet PBIP-Pfade in der viBI-Bibliothek.\n` +
-      `- apply_full_page_html({pbipPath, html}): schreibt ein vollständiges HTML als single page-fillendes Visual in die report.json.\n` +
-      `- run_fabric_modeling({goal, kpis, tables, pbipPath?}): startet automatische Modellierung (nur falls Fabric-MCP verbunden).`;
+      `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
+      `- list_model({pbipPath}): vollständiger TMDL-Zustand inkl. Measures und Beziehungen.\n` +
+      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen.\n` +
+      `- add_relationship({pbipPath, fromTable, fromColumn, toTable, toColumn, crossFilteringBehavior?, isActive?}): Beziehung anlegen (from = Many-Seite/Faktentabelle, to = One-Seite/Dimension).\n` +
+      `- remove_relationship({pbipPath, id}): Beziehung löschen.\n` +
+      `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle anlegen.\n` +
+      `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
+      `- apply_full_page_html({pbipPath, html}): page-fillendes HTML-Visual in report.json schreiben.\n` +
+      `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
+      `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
+      `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).`;
     chat.setExtraSystemPrompt(ctx);
     chat.setToolArgDefaults({
       pbipPath: state.pbipPath,
@@ -152,40 +159,26 @@ export default function App() {
 
   const onAcceptTables = async (suggestion: TableSuggestion) => {
     if (!state.project) return;
-    setBusy(true);
     setState((s) => ({ ...s, suggestion, modelingStep: "working" }));
-    chat.seedAssistant(
-      `Super – ich rufe jetzt den Microsoft-Fabric-MCP auf, der Beziehungen, Measures und eine Datumstabelle für deinen Bericht „${state.project.name}" anlegt. Tabellen: ${suggestion.tables
-        .map((t) => t.name)
-        .join(", ")}`
+    // Chat-getriebene Modellierung: KI nutzt list_model, add_relationship,
+    // add_measure, add_date_table direkt auf der TMDL.
+    const tableLine = suggestion.tables
+      .map((t) => `${t.name} (${t.keyColumns.join(", ")})`)
+      .join("\n - ");
+    const kpiLine = state.project.kpis.length
+      ? state.project.kpis.join(", ")
+      : "(keine konkreten KPIs angegeben – schlage typische BC-KPIs vor)";
+    chat.send(
+      `Modelliere jetzt den Bericht „${state.project.name}" für mich. Ziel: ${state.project.goal}\n\n` +
+        `Geladene Tabellen:\n - ${tableLine}\n\n` +
+        `Geplante KPIs: ${kpiLine}\n\n` +
+        `Schritte:\n` +
+        `1. list_model aufrufen, um den aktuellen TMDL-Zustand zu sehen.\n` +
+        `2. Falls keine Datumstabelle existiert, add_date_table aufrufen.\n` +
+        `3. Sinnvolle Beziehungen via add_relationship anlegen (Faktentabelle → Dimension).\n` +
+        `4. Pro KPI ein passendes DAX-Measure via add_measure anlegen (mit formatString und displayFolder "Measures").\n` +
+        `5. Am Ende eine kurze deutsche Zusammenfassung, was du angelegt hast und welche Reload-Hinweise gelten.`
     );
-    try {
-      const r = await helper.runModeling({
-        goal: state.project.goal,
-        kpis: state.project.kpis,
-        tables: suggestion.tables,
-        pbipPath: state.pbipPath,
-      });
-      if (r.ok) {
-        chat.seedAssistant(
-          `Modellierung abgeschlossen. ` +
-            (r.log ?? [])
-              .filter((l) => l.ok)
-              .map((l) => `✓ ${l.tool}`)
-              .join(" · ")
-        );
-      } else {
-        chat.seedAssistant(
-          `Fabric-MCP konnte nicht automatisch modellieren (${
-            r.error ?? "unbekannter Fehler"
-          })${r.hint ? "\n\n" + r.hint : ""}\n\nDu kannst trotzdem direkt mit mir per Chat weiterarbeiten – ich helfe dir bei DAX, Beziehungen und Measures Schritt für Schritt.`
-        );
-      }
-    } catch (e) {
-      chat.seedAssistant(`Modellierung-Aufruf fehlgeschlagen: ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const onRequestDifferentTables = (suggestion: TableSuggestion) => {
