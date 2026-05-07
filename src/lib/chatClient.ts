@@ -25,7 +25,18 @@ export async function callChat(req: ChatRequest): Promise<ChatResponse> {
 }
 
 export function toApiMessages(messages: ChatMessage[]) {
+  // Tool-Resultate werden als user-Nachricht zurückgespielt, damit Gemini im
+  // nächsten Schritt darauf reagieren kann (sonst sieht das Modell nur die
+  // ursprüngliche User-Frage und ruft das Tool im Loop immer wieder auf).
   return messages
-    .filter((m) => m.role === "user" || m.role === "model")
-    .map((m) => ({ role: m.role as "user" | "model", content: m.content }));
+    .map((m) => {
+      if (m.role === "tool") {
+        return {
+          role: "user" as const,
+          content: `[Tool-Resultat: ${m.toolName ?? "unknown"}]\n${m.content}`,
+        };
+      }
+      return { role: m.role as "user" | "model", content: m.content };
+    })
+    .filter((m) => m.role === "user" || m.role === "model");
 }
