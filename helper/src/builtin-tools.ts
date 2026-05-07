@@ -33,10 +33,25 @@ export const builtInTools: BuiltInTool[] = [
       },
     },
     async handler(args) {
-      const path = str(args.pbipPath);
-      if (!path) throw new Error("pbipPath erforderlich – nutze den Pfad aus dem System-Prompt.");
+      let path = str(args.pbipPath);
+      if (!path) {
+        // Fallback: nimm das zuletzt benutzte Projekt aus der Bibliothek
+        const lib = loadLibrary();
+        const candidates = [...lib.projects].sort(
+          (a, b) =>
+            new Date(b.lastOpenedAt ?? b.createdAt).getTime() -
+            new Date(a.lastOpenedAt ?? a.createdAt).getTime()
+        );
+        const fallback = candidates.find((p) => p.pbipPath && existsSync(p.pbipPath));
+        if (!fallback) {
+          throw new Error(
+            "pbipPath fehlt und es gibt kein offenes Projekt in der viBI-Bibliothek."
+          );
+        }
+        path = fallback.pbipPath;
+      }
       if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
-      return readMetadata(path);
+      return { pbipPath: path, ...readMetadata(path) };
     },
   },
   {

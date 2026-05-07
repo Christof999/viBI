@@ -80,6 +80,12 @@ export default function App() {
       `- apply_full_page_html({pbipPath, html}): schreibt ein vollständiges HTML als single page-fillendes Visual in die report.json.\n` +
       `- run_fabric_modeling({goal, kpis, tables, pbipPath?}): startet automatische Modellierung (nur falls Fabric-MCP verbunden).`;
     chat.setExtraSystemPrompt(ctx);
+    chat.setToolArgDefaults({
+      pbipPath: state.pbipPath,
+      goal: state.project.goal,
+      kpis: state.project.kpis,
+      tables: state.suggestion?.tables.map((t) => t.name),
+    });
   }, [state.project, state.suggestion, state.pbipPath]);
 
   // First boot: route to library if helper has projects

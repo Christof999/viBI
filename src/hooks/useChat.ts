@@ -17,9 +17,14 @@ export function useChat(tools: MCPTool[]) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const extraSystemRef = useRef<string | null>(null);
+  const argDefaultsRef = useRef<Record<string, unknown>>({});
 
   const setExtraSystemPrompt = useCallback((text: string | null) => {
     extraSystemRef.current = text;
+  }, []);
+
+  const setToolArgDefaults = useCallback((defaults: Record<string, unknown>) => {
+    argDefaultsRef.current = defaults;
   }, []);
 
   const seedAssistant = useCallback((text: string) => {
@@ -71,11 +76,24 @@ export function useChat(tools: MCPTool[]) {
             };
             working = [...working, pending];
             setMessages(working);
+            // Auto-fill any tool argument that the model omitted but matches a
+            // known default (e.g. pbipPath of the active project). Schema
+            // properties take precedence: only fill defaults that the tool
+            // actually declares.
+            const props =
+              ((tool.inputSchema as { properties?: Record<string, unknown> } | undefined)
+                ?.properties as Record<string, unknown> | undefined) ?? {};
+            const mergedArgs: Record<string, unknown> = { ...call.args };
+            for (const [k, v] of Object.entries(argDefaultsRef.current)) {
+              if (k in props && (mergedArgs[k] === undefined || mergedArgs[k] === "")) {
+                mergedArgs[k] = v;
+              }
+            }
             try {
               const { result } = await helper.callMCPTool(
                 tool.server,
                 call.name,
-                call.args
+                mergedArgs
               );
               const resultMsg: ChatMessage = {
                 ...pending,
@@ -111,5 +129,14 @@ export function useChat(tools: MCPTool[]) {
     setError(null);
   }, []);
 
-  return { messages, send, busy, error, reset, seedAssistant, setExtraSystemPrompt };
+  return {
+    messages,
+    send,
+    busy,
+    error,
+    reset,
+    seedAssistant,
+    setExtraSystemPrompt,
+    setToolArgDefaults,
+  };
 }
