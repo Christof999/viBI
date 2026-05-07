@@ -3,6 +3,7 @@ import type { HelperStatus, Phase, ProjectConfig } from "../types";
 
 interface Props {
   status: HelperStatus | null;
+  toolCount?: number;
   onRefresh: () => void;
   project?: ProjectConfig;
   phase: Phase;
@@ -17,7 +18,7 @@ const PHASE_LABEL: Record<Phase, string> = {
   design: "Design",
 };
 
-export function Header({ status, onRefresh, project, phase, onRestart, onLibrary }: Props) {
+export function Header({ status, toolCount, onRefresh, project, phase, onRestart, onLibrary }: Props) {
   const ok = status?.ok === true;
   return (
     <motion.header
@@ -66,8 +67,23 @@ export function Header({ status, onRefresh, project, phase, onRestart, onLibrary
 
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <StatusPill label="Helper" ok={ok} />
-        <StatusPill label="Fabric MCP" ok={!!status?.mcp?.fabric} dim={!ok} />
-        <StatusPill label="Custom MCP" ok={!!status?.mcp?.custom} dim={!ok} />
+        <StatusPill
+          label={`KI-Tools${toolCount !== undefined ? ` · ${toolCount}` : ""}`}
+          ok={ok && (toolCount ?? 0) > 0}
+          dim={!ok}
+        />
+        <StatusPill
+          label="Fabric MCP"
+          ok={!!status?.mcp?.fabric}
+          dim={!ok}
+          optional
+        />
+        <StatusPill
+          label="Custom MCP"
+          ok={!!status?.mcp?.custom}
+          dim={!ok}
+          optional
+        />
         <button onClick={onRefresh}>↻</button>
         {onLibrary && phase !== "library" && (
           <button onClick={onLibrary}>Bibliothek</button>
@@ -103,20 +119,34 @@ function StatusPill({
   label,
   ok,
   dim,
+  optional,
 }: {
   label: string;
   ok: boolean;
   dim?: boolean;
+  optional?: boolean;
 }) {
+  // Optionale Pills (Fabric/Custom MCP) zeigen ihren "nicht verbunden"-Zustand
+  // grau statt rot, damit klar wird: nicht erforderlich, nur add-on.
+  const dotColor = ok
+    ? "var(--ok)"
+    : optional
+    ? "var(--border)"
+    : "var(--danger)";
   return (
     <div
+      title={
+        optional && !ok
+          ? "Optional. Nicht erforderlich für den Standard-Workflow."
+          : undefined
+      }
       style={{
         display: "flex",
         alignItems: "center",
         gap: 6,
         fontSize: 12,
         color: dim ? "var(--muted)" : "var(--text)",
-        opacity: dim ? 0.6 : 1,
+        opacity: dim ? 0.6 : optional && !ok ? 0.7 : 1,
       }}
     >
       <motion.span
@@ -126,7 +156,7 @@ function StatusPill({
           width: 8,
           height: 8,
           borderRadius: "50%",
-          background: ok ? "var(--ok)" : "var(--danger)",
+          background: dotColor,
           display: "inline-block",
         }}
       />

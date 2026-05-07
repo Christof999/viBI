@@ -282,6 +282,7 @@ export default function App() {
       <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
         <Header
           status={status}
+          toolCount={tools.length}
           onRefresh={refresh}
           project={state.project}
           phase={state.phase}
