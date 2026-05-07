@@ -3,6 +3,21 @@
 KI-gestützter PowerBI-Berichts-Designer. Web-App (React + Vite + Framer Motion) auf Vercel,
 mit lokalem Windows-Helper für PowerBI Desktop, Dateisystem und MCP-Server-Anbindung.
 
+## User-Flow
+
+1. **Onboarding-Wizard** (8 Schritte, animiert)
+   1. Welcome
+   2. Helper-Setup mit Live-Statuscheck (Polling alle 2s) und Download-Button
+   3. Berichtstyp – aktuell nur „Power BI Report" (PBIP); Paginated als Coming-soon
+   4. Bericht-Name → wird auch Dateiname
+   5. Ziel des Berichts
+   6. Corporate Identity – Logo-Upload, Primär/Sekundär/Akzent/Hintergrund/Text-Farbe, Schriftart
+   7. KPIs als Chips
+   8. Zusammenfassung mit CI-Vorschau
+2. **Modeling-Phase** – PBIP wird erzeugt + PowerBI Desktop geöffnet; Chat hilft bei Datenmodell, DAX, Power-Query
+3. **Übergang** – Klick auf „Modell fertig" liest Metadaten aus dem PBIP, schließt PBI Desktop
+4. **Design-Phase** – Snippet-Liste, Live-HTML-Preview im sandboxed iframe, „Kopieren für HTML-Visual"
+
 ## Architektur
 
 ```

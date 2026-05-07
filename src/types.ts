@@ -23,8 +23,53 @@ export interface HelperStatus {
   error?: string;
 }
 
+export type Phase = "onboarding" | "modeling" | "design";
+
+export type ReportType = "report" | "paginated";
+
+export interface CIColors {
+  primary: string;
+  secondary: string;
+  accent: string;
+  background: string;
+  text: string;
+}
+
+export interface CIConfig {
+  logoDataUrl?: string;
+  colors: CIColors;
+  fontFamily: string;
+}
+
+export interface ProjectConfig {
+  name: string;
+  fileName: string;
+  reportType: ReportType;
+  goal: string;
+  ci: CIConfig;
+  kpis: string[];
+  createdAt: string;
+}
+
+export type SnippetType = "kpi" | "chart" | "table" | "custom";
+
+export interface HtmlSnippet {
+  id: string;
+  name: string;
+  type: SnippetType;
+  html: string;
+}
+
+export interface AppState {
+  phase: Phase;
+  project?: ProjectConfig;
+  pbipPath?: string;
+  snippets: HtmlSnippet[];
+}
+
 export interface PBIPProject {
   name: string;
+  ci?: CIConfig;
   tables: PBIPTable[];
 }
 

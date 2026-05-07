@@ -1,4 +1,4 @@
-import type { HelperStatus, MCPTool, PBIPProject } from "../types";
+import type { HelperStatus, MCPTool, ProjectConfig } from "../types";
 
 const HELPER_URL =
   (import.meta.env.VITE_HELPER_URL as string | undefined) ??
@@ -35,13 +35,26 @@ export const helper = {
     });
   },
 
-  savePBIP(
-    project: PBIPProject,
+  closePowerBIDesktop(): Promise<{ ok: boolean }> {
+    return req("/powerbi/close", { method: "POST" });
+  },
+
+  createProject(
+    project: ProjectConfig,
     targetDir: string
   ): Promise<{ ok: boolean; path: string }> {
-    return req("/pbip/save", {
+    return req("/project/create", {
       method: "POST",
       body: JSON.stringify({ project, targetDir }),
+    });
+  },
+
+  readProjectMetadata(pbipPath: string): Promise<{
+    tables: { name: string; columns: { name: string; dataType: string }[] }[];
+  }> {
+    return req("/project/metadata", {
+      method: "POST",
+      body: JSON.stringify({ pbipPath }),
     });
   },
 

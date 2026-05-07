@@ -1,5 +1,5 @@
-// Minimal PBIP (Power BI Project) writer.
-// Creates the folder layout PowerBI Desktop expects when "Save as project" is enabled:
+// PBIP (Power BI Project) writer with CI-aware report theme.
+// Layout PowerBI Desktop expects when "Save as project" is enabled:
 //
 //   <Project>/
 //     <Project>.pbip
@@ -9,12 +9,9 @@
 //     <Project>.Report/
 //       definition.pbir
 //       report.json
-//
-// This is a starter implementation — sufficient to open in PBI Desktop with a basic model.
-// Real-world projects will want more sophisticated TMDL generation; you can extend
-// this or have your custom MCP server handle it.
+//       StaticResources/RegisteredResources/Theme.json
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 interface Column {
@@ -26,9 +23,24 @@ interface Table {
   columns: Column[];
   rows?: Record<string, unknown>[];
 }
+interface CIConfig {
+  logoDataUrl?: string;
+  colors: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    background: string;
+    text: string;
+  };
+  fontFamily: string;
+}
 interface Project {
   name: string;
-  tables: Table[];
+  fileName?: string;
+  goal?: string;
+  ci?: CIConfig;
+  kpis?: string[];
+  tables?: Table[];
 }
 
 function ensureDir(p: string) {
@@ -43,7 +55,6 @@ function tmdlForTable(t: Table): string {
     )
     .join("\n\n");
 
-  // M expression with inlined rows so the file is self-contained.
   const rows = (t.rows ?? []).map((r) => {
     const fields = t.columns
       .map((c) => {
@@ -73,23 +84,58 @@ in
   );
 }
 
+function defaultStarterTable(name: string): Table {
+  return {
+    name: "Sales",
+    columns: [
+      { name: "Date", dataType: "dateTime" },
+      { name: "Region", dataType: "string" },
+      { name: name || "Revenue", dataType: "double" },
+    ],
+    rows: [
+      { Date: "2026-01-01", Region: "EU", [name || "Revenue"]: 12450.5 },
+      { Date: "2026-01-02", Region: "US", [name || "Revenue"]: 9870.0 },
+      { Date: "2026-01-03", Region: "APAC", [name || "Revenue"]: 5432.1 },
+    ],
+  };
+}
+
+function ciToTheme(name: string, ci?: CIConfig) {
+  const c = ci?.colors;
+  return {
+    name: `${name} Theme`,
+    dataColors: c
+      ? [c.primary, c.accent, c.secondary, c.text, c.primary, c.accent]
+      : ["#0078D4", "#F2C811", "#1F2937", "#111827"],
+    background: c?.background ?? "#FFFFFF",
+    foreground: c?.text ?? "#111827",
+    tableAccent: c?.accent ?? "#F2C811",
+  };
+}
+
 export function writePBIP(projectDir: string, project: Project): string {
   ensureDir(projectDir);
-  const semDir = join(projectDir, `${project.name}.SemanticModel`);
+  const name = project.name;
+  const semDir = join(projectDir, `${name}.SemanticModel`);
   const semDefDir = join(semDir, "definition");
-  const repDir = join(projectDir, `${project.name}.Report`);
+  const repDir = join(projectDir, `${name}.Report`);
+  const themeDir = join(repDir, "StaticResources", "RegisteredResources");
   ensureDir(semDefDir);
-  ensureDir(repDir);
+  ensureDir(themeDir);
 
   // .pbip pointer file
-  const pbip = {
-    version: "1.0",
-    artifacts: [
-      { report: { path: `${project.name}.Report` } },
-    ],
-    settings: { enableAutoRecovery: true },
-  };
-  writeFileSync(join(projectDir, `${project.name}.pbip`), JSON.stringify(pbip, null, 2));
+  writeFileSync(
+    join(projectDir, `${name}.pbip`),
+    JSON.stringify(
+      {
+        version: "1.0",
+        artifacts: [{ report: { path: `${name}.Report` } }],
+        settings: { enableAutoRecovery: true },
+      },
+      null,
+      2
+    )
+  );
 
   // SemanticModel definition.pbism
   writeFileSync(
@@ -97,38 +143,42 @@ export function writePBIP(projectDir: string, project: Project): string {
     JSON.stringify({ version: "4.0", settings: {} }, null, 2)
   );
 
-  // model.tmdl
+  // model.tmdl with at least one starter table per KPI (or default)
+  const tables: Table[] =
+    project.tables && project.tables.length
+      ? project.tables
+      : (project.kpis?.length
+          ? project.kpis.slice(0, 1).map((k) => defaultStarterTable(k))
+          : [defaultStarterTable("Revenue")]);
+
   const tmdl =
     `model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\n` +
-    project.tables.map(tmdlForTable).join("\n\n");
+    tables.map(tmdlForTable).join("\n\n");
   writeFileSync(join(semDefDir, "model.tmdl"), tmdl);
 
-  // Report definition.pbir
+  // Report definition.pbir + report.json + theme
   writeFileSync(
     join(repDir, "definition.pbir"),
     JSON.stringify(
       {
         version: "1.0",
-        datasetReference: {
-          byPath: { path: `../${project.name}.SemanticModel` },
-        },
+        datasetReference: { byPath: { path: `../${name}.SemanticModel` } },
       },
       null,
       2
     )
   );
 
-  // Minimal report.json (single empty page)
   writeFileSync(
     join(repDir, "report.json"),
     JSON.stringify(
       {
-        config: '{"version":"5.43","themeCollection":{}}',
+        config: '{"version":"5.43","themeCollection":{"customTheme":{"name":"viBI"}}}',
         layoutOptimization: 0,
         sections: [
           {
             name: "Page1",
-            displayName: "Seite 1",
+            displayName: "Übersicht",
             displayOption: 1,
             visualContainers: [],
           },
@@ -139,5 +189,52 @@ export function writePBIP(projectDir: string, project: Project): string {
     )
   );
 
-  return join(projectDir, `${project.name}.pbip`);
+  writeFileSync(
+    join(themeDir, "Theme.json"),
+    JSON.stringify(ciToTheme(name, project.ci), null, 2)
+  );
+
+  // viBI metadata sidecar (so we can re-load CI/KPIs later)
+  writeFileSync(
+    join(projectDir, ".vibi.json"),
+    JSON.stringify(
+      {
+        name,
+        fileName: project.fileName,
+        goal: project.goal,
+        kpis: project.kpis ?? [],
+        ci: project.ci,
+      },
+      null,
+      2
+    )
+  );
+
+  return join(projectDir, `${name}.pbip`);
+}
+
+export function readMetadata(pbipPath: string): {
+  tables: { name: string; columns: { name: string; dataType: string }[] }[];
+} {
+  // pbipPath = .../Project/Project.pbip
+  const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
+  const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
+  const tmdlPath = join(projectDir, `${projName}.SemanticModel`, "definition", "model.tmdl");
+  if (!existsSync(tmdlPath)) return { tables: [] };
+  const txt = readFileSync(tmdlPath, "utf8");
+  const tableRegex = /table '([^']+)'([\s\S]*?)(?=\ntable '|$)/g;
+  const colRegex = /column '([^']+)'\s*\n\s*dataType:\s*(\w+)/g;
+  const tables: { name: string; columns: { name: string; dataType: string }[] }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = tableRegex.exec(txt))) {
+    const name = m[1];
+    const body = m[2];
+    const cols: { name: string; dataType: string }[] = [];
+    let cm: RegExpExecArray | null;
+    while ((cm = colRegex.exec(body))) {
+      cols.push({ name: cm[1], dataType: cm[2] });
+    }
+    tables.push({ name, columns: cols });
+  }
+  return { tables };
 }

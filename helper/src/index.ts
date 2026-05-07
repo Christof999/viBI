@@ -1,10 +1,10 @@
 import cors from "cors";
-import { spawn } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
 import { mcpRegistry } from "./mcp.js";
-import { writePBIP } from "./pbip.js";
+import { readMetadata, writePBIP } from "./pbip.js";
 
 const PORT = Number(process.env.PORT ?? 7321);
 const CORS_ORIGIN =
@@ -13,20 +13,17 @@ const CORS_ORIGIN =
 const PBI_DESKTOP_CANDIDATES = [
   "C:/Program Files/Microsoft Power BI Desktop/bin/PBIDesktop.exe",
   "C:/Program Files (x86)/Microsoft Power BI Desktop/bin/PBIDesktop.exe",
-  // Microsoft Store install path is dynamic; user can override via env.
 ];
 const PBI_DESKTOP_PATH = process.env.POWERBI_DESKTOP_PATH;
 
 function findPowerBIDesktop(): string | null {
   if (PBI_DESKTOP_PATH && existsSync(PBI_DESKTOP_PATH)) return PBI_DESKTOP_PATH;
-  for (const p of PBI_DESKTOP_CANDIDATES) {
-    if (existsSync(p)) return p;
-  }
+  for (const p of PBI_DESKTOP_CANDIDATES) if (existsSync(p)) return p;
   return null;
 }
 
 const app = express();
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 const allowedOrigins = CORS_ORIGIN.split(",").map((s) => s.trim());
 app.use(
@@ -36,7 +33,9 @@ app.use(
       const ok = allowedOrigins.some((pat) => {
         if (pat === origin) return true;
         if (pat.includes("*")) {
-          const re = new RegExp("^" + pat.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
+          const re = new RegExp(
+            "^" + pat.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$"
+          );
           return re.test(origin);
         }
         return false;
@@ -46,10 +45,10 @@ app.use(
   })
 );
 
-app.get("/status", async (_req, res) => {
+app.get("/status", (_req, res) => {
   res.json({
     ok: true,
-    version: "0.1.0",
+    version: "0.2.0",
     powerBIDesktopFound: !!findPowerBIDesktop(),
     mcp: {
       fabric: mcpRegistry.isConnected("fabric"),
@@ -75,7 +74,21 @@ app.post("/powerbi/open", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/pbip/save", (req, res) => {
+app.post("/powerbi/close", (_req, res) => {
+  if (process.platform !== "win32") {
+    res.json({ ok: false, error: "Nur unter Windows verfügbar" });
+    return;
+  }
+  exec("taskkill /IM PBIDesktop.exe /F", (err, stdout, stderr) => {
+    if (err && !/not found/i.test(stderr)) {
+      res.status(500).json({ ok: false, error: stderr || err.message });
+      return;
+    }
+    res.json({ ok: true, output: stdout || stderr });
+  });
+});
+
+app.post("/project/create", (req, res) => {
   try {
     const { project, targetDir } = req.body ?? {};
     if (!project || !targetDir) {
@@ -83,11 +96,24 @@ app.post("/pbip/save", (req, res) => {
       return;
     }
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-    const projectDir = join(targetDir, project.name);
+    const projectDir = join(targetDir, project.fileName ?? project.name);
     const path = writePBIP(projectDir, project);
     res.json({ ok: true, path });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.post("/project/metadata", (req, res) => {
+  try {
+    const { pbipPath } = req.body ?? {};
+    if (!pbipPath) {
+      res.status(400).json({ error: "pbipPath erforderlich" });
+      return;
+    }
+    res.json(readMetadata(pbipPath));
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
   }
 });
 
@@ -113,7 +139,7 @@ app.post("/mcp/call", async (req, res) => {
   }
 });
 
-// Convenience: write an arbitrary file (audit-log + safety: only inside whitelisted dirs)
+// File write within whitelisted roots (used for ad-hoc HTML snippet exports etc.)
 const ALLOWED_WRITE_ROOTS = (process.env.ALLOWED_WRITE_ROOTS ?? "C:/PowerBI")
   .split(",")
   .map((s) => s.trim().replace(/\\/g, "/"));
@@ -136,6 +162,35 @@ app.post("/file/write", (req, res) => {
   if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(target, contents, "utf8");
   res.json({ ok: true, path: target });
+});
+
+// PowerShell setup script the onboarding page links to.
+const SETUP_PS1 = `# viBI Helper – Setup
+# Lädt Node.js (falls nötig), klont das Repo und startet den Helper auf :7321.
+$ErrorActionPreference = "Stop"
+$ROOT = "$env:USERPROFILE\\.vibi-helper"
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  Write-Host "Bitte zuerst Node.js >= 20 installieren: https://nodejs.org/"
+  exit 1
+}
+if (-not (Test-Path $ROOT)) {
+  git clone https://github.com/Christof999/viBI.git $ROOT
+}
+Push-Location "$ROOT/helper"
+npm install
+npm run build
+Start-Process -NoNewWindow node "dist/index.js"
+Pop-Location
+Write-Host "viBI Helper läuft auf http://localhost:7321"
+`;
+
+app.get("/download/setup.ps1", (_req, res) => {
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="vibi-helper-setup.ps1"'
+  );
+  res.send(SETUP_PS1);
 });
 
 mcpRegistry
