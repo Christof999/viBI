@@ -277,14 +277,18 @@ function HelperStep() {
             Schritt 1 · Download
           </div>
           <a
-            href={`${helperUrl}/download/setup.ps1`}
+            href="/vibi-helper-setup.ps1"
             download="vibi-helper-setup.ps1"
             style={{ textDecoration: "none" }}
           >
             <button className="primary" style={{ width: "100%" }}>
-              Helper-Setup herunterladen
+              Helper-Setup herunterladen (.ps1)
             </button>
           </a>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+            Rechtsklick auf die Datei → „Mit PowerShell ausführen". Klont das
+            Repo, baut den Helper und startet ihn auf Port 7321.
+          </div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
             Alternativ manuell:{" "}
             <code style={{ background: "#000", padding: "2px 4px", borderRadius: 4 }}>
