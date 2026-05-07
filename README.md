@@ -14,9 +14,14 @@ mit lokalem Windows-Helper für PowerBI Desktop, Dateisystem und MCP-Server-Anbi
    6. Corporate Identity – Logo-Upload, Primär/Sekundär/Akzent/Hintergrund/Text-Farbe, Schriftart
    7. KPIs als Chips
    8. Zusammenfassung mit CI-Vorschau
-2. **Modeling-Phase** – PBIP wird erzeugt + PowerBI Desktop geöffnet; Chat hilft bei Datenmodell, DAX, Power-Query
+2. **Modeling-Phase**
+   1. **Tabellen-Vorschlag** – `/api/suggest-tables` ruft Gemini mit BC-Meta-Wissen, schlägt konkrete BC-Tabellen vor (Sales Invoice Header/Line, Item, Customer, Location …) inkl. Begründung und Schlüsselspalten
+   2. Zwei Buttons:
+      - **„Tabellen geladen"** → Helper ruft Microsoft-Fabric-MCP via `/modeling/run` auf (Heuristik wählt passende Tools für Beziehungen, Measures, Datumstabelle)
+      - **„Andere Tabellen"** → Chat öffnet sich mit vorbelegtem Validierungs-Prompt gegen die Berichtsbeschreibung
+   3. Chat hilft bei DAX, Power-Query, manueller Modellierung
 3. **Übergang** – Klick auf „Modell fertig" liest Metadaten aus dem PBIP, schließt PBI Desktop
-4. **Design-Phase** – Snippet-Liste, Live-HTML-Preview im sandboxed iframe, „Kopieren für HTML-Visual"
+4. **Design-Phase** – **Ein einziges, page-fillendes HTML-Visual**. Editor + Live-Preview, „Kopieren" (für manuelles Einfügen) oder „In Bericht einbetten" (Helper schreibt das HTML-Visual direkt in `report.json`).
 
 ## Bibliothek (lokal auf dem User-PC)
 

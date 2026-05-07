@@ -456,17 +456,33 @@ function GoalStep({
   return (
     <div>
       <StepHeader
-        title="Was ist das Ziel?"
-        sub="Beschreibe in 1-3 Sätzen, was der Bericht beantworten soll. Das hilft der KI später beim Datenmodell und Design."
+        title="Beschreibe den Bericht"
+        sub="In 1-3 Sätzen: Was soll ausgewertet werden, in welchem Kontext, für wen? Auf Basis dieser Beschreibung schlägt die KI gleich konkrete Business-Central-Tabellen vor."
       />
       <textarea
         autoFocus
         rows={5}
-        placeholder="z. B. ‚Wöchentliche Verkaufsperformance pro Region für die Geschäftsleitung – Fokus auf Zielerreichung und Trends.'"
+        placeholder={`z. B. „Ich möchte den Absatz einer Artikelgruppe über mehrere Standorte auswerten – wöchentlicher Vergleich der Verkaufsmenge und des Umsatzes je Niederlassung, plus Trend gegenüber Vorjahr."`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{ resize: "vertical" }}
       />
+      <div
+        style={{
+          marginTop: 10,
+          padding: 10,
+          background: "var(--panel-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          fontSize: 11,
+          color: "var(--muted)",
+          lineHeight: 1.5,
+        }}
+      >
+        ℹ️ viBI weiß, dass alle deine Niederlassungen <strong>Microsoft Dynamics 365 Business
+        Central</strong> als ERP nutzen. Im nächsten Schritt nach dem Setup
+        bekommst du eine Liste der dafür passenden BC-Tabellen vorgeschlagen.
+      </div>
     </div>
   );
 }

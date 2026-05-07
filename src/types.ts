@@ -54,6 +54,20 @@ export type LocateResult =
   | { ok: true; pbipPath: string; via: "saved" | "search" }
   | { ok: false; reason: "not_found"; searched: string[] };
 
+export interface SuggestedTable {
+  name: string;
+  source: string;
+  purpose: string;
+  keyColumns: string[];
+}
+
+export interface TableSuggestion {
+  tables: SuggestedTable[];
+  rationale: string;
+}
+
+export type ModelingStep = "proposal" | "working" | "finalizing";
+
 export type ReportType = "report" | "paginated";
 
 export interface CIColors {
@@ -95,6 +109,9 @@ export interface AppState {
   pbipPath?: string;
   libraryId?: string;
   snippets: HtmlSnippet[];
+  modelingStep?: ModelingStep;
+  suggestion?: TableSuggestion;
+  fullPageHtml?: string;
 }
 
 export interface PBIPProject {

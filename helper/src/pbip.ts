@@ -100,6 +100,66 @@ function defaultStarterTable(name: string): Table {
   };
 }
 
+// Page dimensions (PowerBI Standard 16:9)
+const PAGE_WIDTH = 1280;
+const PAGE_HEIGHT = 720;
+
+function buildReportJson(opts: {
+  withHtmlPlaceholder?: boolean;
+  htmlContent?: string;
+}) {
+  const html =
+    opts.htmlContent ??
+    (opts.withHtmlPlaceholder
+      ? '<div style="padding:24px;font-family:Segoe UI,system-ui,sans-serif">Bericht wird in viBI gestaltet.</div>'
+      : "");
+  // Single full-page HTML visual covering the entire canvas.
+  // Uses the public "HTML Content" custom visual (CWVHTMLVIEWER1709477497034).
+  const visualContainers = html
+    ? [
+        {
+          x: 0,
+          y: 0,
+          z: 0,
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+          config: JSON.stringify({
+            name: "vibiFullPage",
+            layouts: [{ id: 0, position: { x: 0, y: 0, z: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT } }],
+            singleVisual: {
+              visualType: "CWVHTMLVIEWER1709477497034",
+              objects: {
+                contentFormatting: [
+                  {
+                    properties: {
+                      htmlContent: { expr: { Literal: { Value: JSON.stringify(html) } } },
+                    },
+                  },
+                ],
+              },
+              drillFilterOtherVisuals: true,
+            },
+          }),
+        },
+      ]
+    : [];
+
+  return {
+    config: '{"version":"5.43","themeCollection":{"customTheme":{"name":"viBI"}}}',
+    layoutOptimization: 0,
+    sections: [
+      {
+        name: "Page1",
+        displayName: "Übersicht",
+        displayOption: 1,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+        visualContainers,
+      },
+    ],
+  };
+}
+
 function ciToTheme(name: string, ci?: CIConfig) {
   const c = ci?.colors;
   return {
@@ -171,22 +231,7 @@ export function writePBIP(projectDir: string, project: Project): string {
 
   writeFileSync(
     join(repDir, "report.json"),
-    JSON.stringify(
-      {
-        config: '{"version":"5.43","themeCollection":{"customTheme":{"name":"viBI"}}}',
-        layoutOptimization: 0,
-        sections: [
-          {
-            name: "Page1",
-            displayName: "Übersicht",
-            displayOption: 1,
-            visualContainers: [],
-          },
-        ],
-      },
-      null,
-      2
-    )
+    JSON.stringify(buildReportJson({ withHtmlPlaceholder: true }), null, 2)
   );
 
   writeFileSync(
@@ -211,6 +256,21 @@ export function writePBIP(projectDir: string, project: Project): string {
   );
 
   return join(projectDir, `${name}.pbip`);
+}
+
+export function applyFullPageHTML(pbipPath: string, html: string): string {
+  // pbipPath = .../Project/Project.pbip
+  const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
+  const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
+  const reportJsonPath = join(projectDir, `${projName}.Report`, "report.json");
+  if (!existsSync(reportJsonPath)) {
+    throw new Error(`report.json nicht gefunden unter ${reportJsonPath}`);
+  }
+  writeFileSync(
+    reportJsonPath,
+    JSON.stringify(buildReportJson({ htmlContent: html }), null, 2)
+  );
+  return reportJsonPath;
 }
 
 export function readMetadata(pbipPath: string): {

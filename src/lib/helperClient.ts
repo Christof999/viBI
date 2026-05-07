@@ -116,6 +116,34 @@ export const helper = {
       body: JSON.stringify({ server, name, args }),
     });
   },
+
+  runModeling(input: {
+    goal: string;
+    kpis: string[];
+    tables: { name: string; keyColumns?: string[] }[];
+    pbipPath?: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    hint?: string;
+    available?: string[];
+    log?: { tool: string; ok: boolean; result?: unknown; error?: string }[];
+  }> {
+    return req("/modeling/run", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  applyFullPageHTML(input: {
+    pbipPath: string;
+    html: string;
+  }): Promise<{ ok: boolean; path: string }> {
+    return req("/report/apply-html", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
 };
 
 export { HELPER_URL };

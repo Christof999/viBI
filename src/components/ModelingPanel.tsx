@@ -1,14 +1,23 @@
 import { motion } from "framer-motion";
-import type { ProjectConfig } from "../types";
+import type { ProjectConfig, TableSuggestion } from "../types";
 
 interface Props {
   project: ProjectConfig;
   pbipPath?: string;
+  suggestion?: TableSuggestion;
   onFinishModeling: () => void;
+  onBackToProposal: () => void;
   busy?: boolean;
 }
 
-export function ModelingPanel({ project, pbipPath, onFinishModeling, busy }: Props) {
+export function ModelingPanel({
+  project,
+  pbipPath,
+  suggestion,
+  onFinishModeling,
+  onBackToProposal,
+  busy,
+}: Props) {
   return (
     <main
       style={{
@@ -55,6 +64,47 @@ export function ModelingPanel({ project, pbipPath, onFinishModeling, busy }: Pro
           )}
         </section>
 
+        {suggestion && (
+          <section
+            style={{
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 15 }}>Geladene/akzeptierte Tabellen</h3>
+              <button onClick={onBackToProposal} style={{ fontSize: 12 }}>
+                ← Zurück zum Vorschlag
+              </button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {suggestion.tables.map((t) => (
+                <span
+                  key={t.name}
+                  style={{
+                    background: "var(--panel-2)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    fontSize: 12,
+                  }}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section
           style={{
             background: "var(--panel)",
@@ -65,22 +115,21 @@ export function ModelingPanel({ project, pbipPath, onFinishModeling, busy }: Pro
         >
           <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>So gehst du jetzt vor</h3>
           <ol style={{ paddingLeft: 18, lineHeight: 1.9, fontSize: 14, color: "var(--text)" }}>
-            <li>Power BI Desktop sollte sich gerade geöffnet haben</li>
+            <li>Power BI Desktop sollte geöffnet sein</li>
             <li>
-              Importiere deine Datenquellen (CSV, SQL, REST…) – nutze den Chat rechts für DAX,
-              Power-Query oder Modellierungs-Hilfe
+              Falls Fabric-MCP-Modellierung nicht automatisch gegriffen hat, nutze den Chat
+              rechts für DAX, Power-Query und Beziehungen
             </li>
-            <li>Definiere Beziehungen, Measures und Hierarchien</li>
-            <li>Wenn das Modell steht: <strong>Bericht in PBI Desktop speichern</strong></li>
+            <li>Speichere den Bericht in PBI Desktop</li>
             <li>
-              Klick unten auf „Modell fertig" – viBI liest die Metadaten ein, schließt PBI Desktop
-              und führt dich ins Design
+              Klick „Modell fertig" – viBI liest die Metadaten ein, schließt PBI und führt
+              dich ins Design (ein einziges, ganzseitiges HTML-Visual)
             </li>
           </ol>
         </section>
 
         <section style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={() => window.location.reload()}>Abbrechen</button>
+          <button onClick={onBackToProposal}>Andere Tabellen vorschlagen</button>
           <button className="primary" onClick={onFinishModeling} disabled={busy}>
             {busy ? "Speichere & schließe PBI…" : "Modell fertig → zum Design ✨"}
           </button>

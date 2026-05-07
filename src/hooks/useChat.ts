@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { callChat, toApiMessages } from "../lib/chatClient";
 import { helper } from "../lib/helperClient";
 import type { ChatMessage, MCPTool } from "../types";
@@ -16,6 +16,15 @@ export function useChat(tools: MCPTool[]) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const extraSystemRef = useRef<string | null>(null);
+
+  const setExtraSystemPrompt = useCallback((text: string | null) => {
+    extraSystemRef.current = text;
+  }, []);
+
+  const seedAssistant = useCallback((text: string) => {
+    setMessages((m) => [...m, { id: uid(), role: "model", content: text }]);
+  }, []);
 
   const send = useCallback(
     async (text: string) => {
@@ -33,7 +42,9 @@ export function useChat(tools: MCPTool[]) {
           const resp = await callChat({
             messages: toApiMessages(working),
             tools,
-            systemPrompt: SYSTEM_PROMPT,
+            systemPrompt: extraSystemRef.current
+              ? `${SYSTEM_PROMPT}\n\n${extraSystemRef.current}`
+              : SYSTEM_PROMPT,
           });
 
           if (resp.text) {
@@ -100,5 +111,5 @@ export function useChat(tools: MCPTool[]) {
     setError(null);
   }, []);
 
-  return { messages, send, busy, error, reset };
+  return { messages, send, busy, error, reset, seedAssistant, setExtraSystemPrompt };
 }

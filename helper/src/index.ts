@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
 import { mcpRegistry } from "./mcp.js";
-import { readMetadata, writePBIP } from "./pbip.js";
+import { applyFullPageHTML, readMetadata, writePBIP } from "./pbip.js";
 import {
   libraryPath,
   loadLibrary,
@@ -169,6 +169,24 @@ app.delete("/library/ci-presets/:id", (req, res) => {
   res.status(ok ? 200 : 404).json({ ok });
 });
 
+app.post("/report/apply-html", (req, res) => {
+  try {
+    const { pbipPath, html } = req.body ?? {};
+    if (typeof pbipPath !== "string" || typeof html !== "string") {
+      res.status(400).json({ ok: false, error: "pbipPath und html erforderlich" });
+      return;
+    }
+    if (!existsSync(pbipPath)) {
+      res.status(404).json({ ok: false, error: "PBIP nicht gefunden" });
+      return;
+    }
+    const path = applyFullPageHTML(pbipPath, html);
+    res.json({ ok: true, path });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 app.post("/project/metadata", (req, res) => {
   try {
     const { pbipPath } = req.body ?? {};
@@ -179,6 +197,57 @@ app.post("/project/metadata", (req, res) => {
     res.json(readMetadata(pbipPath));
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/modeling/run", async (req, res) => {
+  const { goal, kpis, tables, pbipPath } = (req.body ?? {}) as {
+    goal?: string;
+    kpis?: string[];
+    tables?: { name: string; keyColumns?: string[] }[];
+    pbipPath?: string;
+  };
+  if (!goal || !tables?.length) {
+    res.status(400).json({ ok: false, error: "goal und tables erforderlich" });
+    return;
+  }
+  if (!mcpRegistry.isConnected("fabric")) {
+    res.json({
+      ok: false,
+      error: "Fabric-MCP nicht verbunden",
+      hint:
+        "FABRIC_MCP_COMMAND und FABRIC_MCP_ARGS in der Helper-Umgebung setzen, dann Helper neu starten.",
+    });
+    return;
+  }
+  try {
+    const all = await mcpRegistry.listTools();
+    const fabricTools = all.filter((t) => t.server === "fabric");
+    // Heuristik: passende Tools für "auto-modellierung" suchen
+    const candidates = fabricTools.filter((t) =>
+      /model|relationship|measure|date|time|semantic/i.test(t.name + " " + (t.description ?? ""))
+    );
+    if (candidates.length === 0) {
+      res.json({ ok: false, error: "Keine passenden Fabric-Tools gefunden", available: fabricTools.map((t) => t.name) });
+      return;
+    }
+    const log: { tool: string; ok: boolean; result?: unknown; error?: string }[] = [];
+    for (const t of candidates.slice(0, 4)) {
+      try {
+        const result = await mcpRegistry.callTool("fabric", t.name, {
+          goal,
+          kpis: kpis ?? [],
+          tables: tables.map((tab) => tab.name),
+          pbipPath: pbipPath ?? null,
+        });
+        log.push({ tool: t.name, ok: true, result });
+      } catch (e) {
+        log.push({ tool: t.name, ok: false, error: (e as Error).message });
+      }
+    }
+    res.json({ ok: log.some((l) => l.ok), log });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
 

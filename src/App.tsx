@@ -5,17 +5,18 @@ import { Header } from "./components/Header";
 import { LibraryScreen } from "./components/Library";
 import { ModelingPanel } from "./components/ModelingPanel";
 import { Onboarding } from "./components/Onboarding";
+import { TableProposal } from "./components/TableProposal";
 import { useChat } from "./hooks/useChat";
 import { helper } from "./lib/helperClient";
-import { makeStarterSnippets } from "./lib/snippets";
+import { buildFullPageReport } from "./lib/snippets";
 import { loadState, resetState, saveState } from "./lib/storage";
 import type {
   AppState,
   HelperStatus,
-  HtmlSnippet,
   LibraryProject,
   MCPTool,
   ProjectConfig,
+  TableSuggestion,
 } from "./types";
 
 const DEFAULT_TARGET_DIR =
@@ -55,8 +56,27 @@ export default function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  // First boot decision: if user has projects in the helper library and no
-  // current project, show library instead of onboarding.
+  // Keep chat aware of the current project / phase
+  useEffect(() => {
+    if (!state.project) {
+      chat.setExtraSystemPrompt(null);
+      return;
+    }
+    const ctx =
+      `AKTUELLER BERICHT:\n` +
+      `- Name: ${state.project.name}\n` +
+      `- Beschreibung/Ziel: ${state.project.goal}\n` +
+      `- KPIs: ${state.project.kpis.join(", ") || "—"}\n` +
+      (state.suggestion
+        ? `- Vorgeschlagene Tabellen: ${state.suggestion.tables
+            .map((t) => t.name)
+            .join(", ")}\n`
+        : "") +
+      `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.`;
+    chat.setExtraSystemPrompt(ctx);
+  }, [state.project, state.suggestion]);
+
+  // First boot: route to library if helper has projects
   useEffect(() => {
     if (bootChecked) return;
     if (state.project) {
@@ -95,6 +115,7 @@ export default function App() {
         pbipPath: r.path,
         libraryId: r.libraryId,
         phase: "modeling",
+        modelingStep: "proposal",
       }));
       try {
         await helper.openPowerBIDesktop(r.path);
@@ -106,10 +127,66 @@ export default function App() {
         `Projekt konnte nicht erstellt werden: ${(e as Error).message}\n\n` +
           "Läuft der Helper? Phase wird trotzdem gesetzt – du kannst es später erneut versuchen."
       );
-      setState((s) => ({ ...s, project, phase: "modeling" }));
+      setState((s) => ({
+        ...s,
+        project,
+        phase: "modeling",
+        modelingStep: "proposal",
+      }));
     } finally {
       setBusy(false);
     }
+  };
+
+  const onAcceptTables = async (suggestion: TableSuggestion) => {
+    if (!state.project) return;
+    setBusy(true);
+    setState((s) => ({ ...s, suggestion, modelingStep: "working" }));
+    chat.seedAssistant(
+      `Super – ich rufe jetzt den Microsoft-Fabric-MCP auf, der Beziehungen, Measures und eine Datumstabelle für deinen Bericht „${state.project.name}" anlegt. Tabellen: ${suggestion.tables
+        .map((t) => t.name)
+        .join(", ")}`
+    );
+    try {
+      const r = await helper.runModeling({
+        goal: state.project.goal,
+        kpis: state.project.kpis,
+        tables: suggestion.tables,
+        pbipPath: state.pbipPath,
+      });
+      if (r.ok) {
+        chat.seedAssistant(
+          `Modellierung abgeschlossen. ` +
+            (r.log ?? [])
+              .filter((l) => l.ok)
+              .map((l) => `✓ ${l.tool}`)
+              .join(" · ")
+        );
+      } else {
+        chat.seedAssistant(
+          `Fabric-MCP konnte nicht automatisch modellieren (${
+            r.error ?? "unbekannter Fehler"
+          })${r.hint ? "\n\n" + r.hint : ""}\n\nDu kannst trotzdem direkt mit mir per Chat weiterarbeiten – ich helfe dir bei DAX, Beziehungen und Measures Schritt für Schritt.`
+        );
+      }
+    } catch (e) {
+      chat.seedAssistant(`Modellierung-Aufruf fehlgeschlagen: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRequestDifferentTables = (suggestion: TableSuggestion) => {
+    if (!state.project) return;
+    setState((s) => ({ ...s, suggestion }));
+    chat.seedAssistant(
+      `Verstanden – sag mir, welche Tabellen du stattdessen verwenden möchtest. Ich validiere sie gegen deine ursprüngliche Anforderung:\n\n` +
+        `> ${state.project.goal}\n\n` +
+        `Bisher hatte ich vorgeschlagen: ${suggestion.tables
+          .map((t) => t.name)
+          .join(", ")}.\n\n` +
+        `Was soll stattdessen rein – und welche Spalten brauchst du?`
+    );
   };
 
   const onFinishModeling = async () => {
@@ -128,12 +205,19 @@ export default function App() {
           /* user may have closed already */
         }
       }
-      const starters = makeStarterSnippets(state.project.kpis);
-      setState((s) => ({ ...s, phase: "design", snippets: starters }));
+      const html = buildFullPageReport(state.project);
+      setState((s) => ({
+        ...s,
+        phase: "design",
+        fullPageHtml: html,
+      }));
     } finally {
       setBusy(false);
     }
   };
+
+  const setFullPageHtml = (html: string) =>
+    setState((s) => ({ ...s, fullPageHtml: html }));
 
   const openLibraryProject = (p: LibraryProject) => {
     const project: ProjectConfig = {
@@ -147,6 +231,7 @@ export default function App() {
     };
     setState({
       phase: "modeling",
+      modelingStep: "working",
       project,
       pbipPath: p.pbipPath,
       libraryId: p.id,
@@ -156,17 +241,14 @@ export default function App() {
 
   const goToLibrary = () => setState((s) => ({ ...s, phase: "library" }));
   const startNew = () =>
-    setState({ phase: "onboarding", snippets: [], project: undefined });
-
-  const addSnippet = (s: HtmlSnippet) =>
-    setState((st) => ({ ...st, snippets: [...st.snippets, s] }));
-  const updateSnippet = (s: HtmlSnippet) =>
-    setState((st) => ({
-      ...st,
-      snippets: st.snippets.map((x) => (x.id === s.id ? s : x)),
-    }));
-  const removeSnippet = (id: string) =>
-    setState((st) => ({ ...st, snippets: st.snippets.filter((x) => x.id !== id) }));
+    setState({
+      phase: "onboarding",
+      snippets: [],
+      project: undefined,
+      modelingStep: undefined,
+      suggestion: undefined,
+      fullPageHtml: undefined,
+    });
 
   const restart = () => {
     if (!confirm("Zurück zur Bibliothek? Aktuelle Sitzung wird verworfen (Berichte bleiben erhalten).")) return;
@@ -225,21 +307,33 @@ export default function App() {
         onLibrary={goToLibrary}
       />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {state.phase === "modeling" && (
-          <ModelingPanel
+        {state.phase === "modeling" && state.modelingStep === "proposal" && (
+          <TableProposal
             project={state.project}
-            pbipPath={state.pbipPath}
-            onFinishModeling={onFinishModeling}
-            busy={busy}
+            initial={state.suggestion}
+            onAccept={onAcceptTables}
+            onRequestDifferent={onRequestDifferentTables}
           />
         )}
+        {state.phase === "modeling" &&
+          (state.modelingStep === "working" || !state.modelingStep) && (
+            <ModelingPanel
+              project={state.project}
+              pbipPath={state.pbipPath}
+              suggestion={state.suggestion}
+              onFinishModeling={onFinishModeling}
+              onBackToProposal={() =>
+                setState((s) => ({ ...s, modelingStep: "proposal" }))
+              }
+              busy={busy}
+            />
+          )}
         {state.phase === "design" && (
           <DesignPanel
-            ci={state.project.ci}
-            snippets={state.snippets}
-            onAdd={addSnippet}
-            onUpdate={updateSnippet}
-            onRemove={removeSnippet}
+            project={state.project}
+            pbipPath={state.pbipPath}
+            html={state.fullPageHtml ?? buildFullPageReport(state.project)}
+            onChange={setFullPageHtml}
           />
         )}
         <ChatPanel
