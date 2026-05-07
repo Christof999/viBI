@@ -67,14 +67,20 @@ export default function App() {
       `- Name: ${state.project.name}\n` +
       `- Beschreibung/Ziel: ${state.project.goal}\n` +
       `- KPIs: ${state.project.kpis.join(", ") || "—"}\n` +
+      (state.pbipPath ? `- PBIP-Pfad: ${state.pbipPath}\n` : "") +
       (state.suggestion
         ? `- Vorgeschlagene Tabellen: ${state.suggestion.tables
             .map((t) => t.name)
             .join(", ")}\n`
         : "") +
-      `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.`;
+      `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
+      `VERFÜGBARE TOOLS (server="helper"):\n` +
+      `- read_pbip_metadata({pbipPath}): liest die geladenen Tabellen + Spalten + Datentypen aus dem PBIP. Wenn der User "verbinde dich mit dem Bericht" oder "schau in den Bericht" sagt, RUFE DIESES TOOL AUF mit dem oben genannten PBIP-Pfad. Behaupte NIEMALS, du könntest dich nicht verbinden, solange das Tool verfügbar ist.\n` +
+      `- locate_pbip({name?}): findet PBIP-Pfade in der viBI-Bibliothek.\n` +
+      `- apply_full_page_html({pbipPath, html}): schreibt ein vollständiges HTML als single page-fillendes Visual in die report.json.\n` +
+      `- run_fabric_modeling({goal, kpis, tables, pbipPath?}): startet automatische Modellierung (nur falls Fabric-MCP verbunden).`;
     chat.setExtraSystemPrompt(ctx);
-  }, [state.project, state.suggestion]);
+  }, [state.project, state.suggestion, state.pbipPath]);
 
   // First boot: route to library if helper has projects
   useEffect(() => {

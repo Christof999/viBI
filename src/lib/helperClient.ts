@@ -107,7 +107,7 @@ export const helper = {
   },
 
   callMCPTool(
-    server: "fabric" | "custom",
+    server: "fabric" | "custom" | "helper",
     name: string,
     args: Record<string, unknown>
   ): Promise<{ result: unknown }> {

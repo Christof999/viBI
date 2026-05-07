@@ -5,6 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import { mcpRegistry } from "./mcp.js";
 import { applyFullPageHTML, readMetadata, writePBIP } from "./pbip.js";
+import { asToolDescriptors, builtInTools } from "./builtin-tools.js";
 import {
   libraryPath,
   loadLibrary,
@@ -253,9 +254,12 @@ app.post("/modeling/run", async (req, res) => {
 
 app.get("/mcp/tools", async (_req, res) => {
   try {
-    res.json(await mcpRegistry.listTools());
+    const mcp = await mcpRegistry.listTools();
+    res.json([...asToolDescriptors(), ...mcp]);
   } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+    // Built-in tools sind immer verfügbar, auch wenn MCP-Listing fehlschlägt
+    res.json(asToolDescriptors());
+    void e;
   }
 });
 
@@ -264,6 +268,16 @@ app.post("/mcp/call", async (req, res) => {
     const { server, name, args } = req.body ?? {};
     if (!server || !name) {
       res.status(400).json({ error: "server und name erforderlich" });
+      return;
+    }
+    if (server === "helper") {
+      const tool = builtInTools.find((t) => t.name === name);
+      if (!tool) {
+        res.status(404).json({ error: `Built-in Tool '${name}' unbekannt` });
+        return;
+      }
+      const result = await tool.handler((args ?? {}) as Record<string, unknown>);
+      res.json({ result });
       return;
     }
     const result = await mcpRegistry.callTool(server, name, args ?? {});

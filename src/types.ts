@@ -12,7 +12,7 @@ export interface MCPTool {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
-  server: "fabric" | "custom";
+  server: "fabric" | "custom" | "helper";
 }
 
 export interface HelperStatus {
