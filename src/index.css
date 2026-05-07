@@ -1,0 +1,84 @@
+:root {
+  --bg: #0b0d12;
+  --panel: #12151c;
+  --panel-2: #1a1e27;
+  --border: #262b36;
+  --text: #e6e9ef;
+  --muted: #8a93a6;
+  --accent: #f2c811; /* PowerBI yellow */
+  --accent-2: #ffd83d;
+  --user: #2a3142;
+  --bot: #1a1e27;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+button:hover {
+  background: var(--panel-2);
+  border-color: #3a4150;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #1a1500;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+button.primary:hover {
+  background: var(--accent-2);
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  outline: none;
+  width: 100%;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2f3a;
+  border-radius: 4px;
+}
