@@ -11,30 +11,49 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { concatenatedTmdl, discoverModel } from "./tmdl-discovery.js";
 
-function tmdlPath(pbipPath: string): string {
+function modelTmdlPath(pbipPath: string): string {
   const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
   const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
   return join(projectDir, `${projName}.SemanticModel`, "definition", "model.tmdl");
 }
 
-function read(pbipPath: string): string {
-  const p = tmdlPath(pbipPath);
-  if (!existsSync(p)) throw new Error(`model.tmdl nicht gefunden: ${p}`);
-  return readFileSync(p, "utf8");
-}
-
-function write(pbipPath: string, content: string): string {
-  const p = tmdlPath(pbipPath);
-  if (existsSync(p)) {
+function backupAndWrite(filePath: string, content: string): string {
+  if (existsSync(filePath)) {
     try {
-      copyFileSync(p, `${p}.bak`);
+      copyFileSync(filePath, `${filePath}.bak`);
     } catch {
-      /* best-effort backup */
+      /* best effort */
     }
   }
-  writeFileSync(p, content, "utf8");
-  return p;
+  writeFileSync(filePath, content, "utf8");
+  return filePath;
+}
+
+// Findet die TMDL-Datei, die die gegebene Tabelle definiert. Funktioniert für
+// single-file (model.tmdl mit allem inline) und sharded (tables/<Name>.tmdl).
+function findTableFile(
+  pbipPath: string,
+  tableName: string
+): { filePath: string; content: string } | null {
+  const d = discoverModel(pbipPath);
+  if (d.layout === "bim" || d.layout === "none") return null;
+  const re = new RegExp(`(?:^|\\n)table\\s+(?:'${escapeRegex(tableName)}'|${escapeRegex(tableName)})\\b`);
+  for (const f of d.files) {
+    if (re.test(f.content)) return { filePath: f.path, content: f.content };
+  }
+  return null;
+}
+
+function relationshipsFilePath(pbipPath: string): string {
+  const d = discoverModel(pbipPath);
+  // Sharded layout → eigene Datei
+  if (d.layout === "sharded") {
+    return join(d.definitionDir, "relationships.tmdl");
+  }
+  // Single-file → an model.tmdl anhängen
+  return modelTmdlPath(pbipPath);
 }
 
 // Gibt die Zeilenposition (start, endExklusiv) eines Blocks zurück, der mit
@@ -84,23 +103,84 @@ export interface ListedRelationship {
 
 export function listModel(pbipPath: string): {
   pbipPath: string;
+  layout: string;
   tables: ListedTable[];
   relationships: ListedRelationship[];
 } {
-  const src = read(pbipPath);
+  const d = discoverModel(pbipPath);
+  if (d.layout === "none") {
+    return { pbipPath, layout: d.layout, tables: [], relationships: [] };
+  }
+
+  // .bim → JSON
+  if (d.layout === "bim" && d.bimJson) {
+    const json = d.bimJson as {
+      model?: {
+        tables?: Array<{
+          name: string;
+          columns?: Array<{ name: string; dataType?: string }>;
+          measures?: Array<{ name: string; expression?: string | string[] }>;
+        }>;
+        relationships?: Array<{
+          name?: string;
+          fromTable?: string;
+          fromColumn?: string;
+          toTable?: string;
+          toColumn?: string;
+        }>;
+      };
+    };
+    const m = json.model ?? json;
+    const tablesIn = (m as { tables?: unknown[] }).tables ?? [];
+    const relsIn = (m as { relationships?: unknown[] }).relationships ?? [];
+    const tables: ListedTable[] = (tablesIn as Array<{
+      name: string;
+      columns?: Array<{ name: string; dataType?: string }>;
+      measures?: Array<{ name: string; expression?: string | string[] }>;
+    }>)
+      .filter((t) => !t.name.startsWith("DateTableTemplate") && !t.name.startsWith("LocalDateTable"))
+      .map((t) => ({
+        name: t.name,
+        columns: (t.columns ?? [])
+          .filter((c) => !c.name.startsWith("RowNumber-"))
+          .map((c) => ({ name: c.name, dataType: c.dataType ?? "unknown" })),
+        measures: (t.measures ?? []).map((mm) => ({
+          name: mm.name,
+          expression: Array.isArray(mm.expression) ? mm.expression.join("\n") : mm.expression ?? "",
+        })),
+      }));
+    const relationships: ListedRelationship[] = (relsIn as Array<{
+      name?: string;
+      fromTable?: string;
+      fromColumn?: string;
+      toTable?: string;
+      toColumn?: string;
+    }>).map((r) => ({
+      id: r.name ?? "",
+      fromTable: r.fromTable ?? "",
+      fromColumn: r.fromColumn ?? "",
+      toTable: r.toTable ?? "",
+      toColumn: r.toColumn ?? "",
+    }));
+    return { pbipPath, layout: d.layout, tables, relationships };
+  }
+
+  const src = concatenatedTmdl(d);
   const tables: ListedTable[] = [];
-  const tableRe = /^table\s+(?:'([^']+)'|(\S+))/gm;
+  // table 'Name' ODER table Name; bis zur nächsten table/file-marker oder EOF
+  const tableRe = /(?:^|\n)table\s+(?:'([^']+)'|(\S+))([\s\S]*?)(?=\ntable\s+(?:'[^']+'|\S+)|\n### __VIBI_FILE__|$)/g;
   let match: RegExpExecArray | null;
   while ((match = tableRe.exec(src))) {
     const name = match[1] ?? match[2];
-    const block = findBlock(src, new RegExp(`^table\\s+(?:'${escapeRegex(name)}'|${escapeRegex(name)})\\b`));
-    if (!block) continue;
-    const body = src.split(/\r?\n/).slice(block.start, block.end).join("\n");
+    const body = match[3];
+    if (name.startsWith("DateTableTemplate") || name.startsWith("LocalDateTable")) continue;
     const cols: { name: string; dataType: string }[] = [];
     const colRe = /column\s+(?:'([^']+)'|(\S+))[\s\S]*?dataType:\s*(\w+)/g;
     let cm: RegExpExecArray | null;
     while ((cm = colRe.exec(body))) {
-      cols.push({ name: cm[1] ?? cm[2], dataType: cm[3] });
+      const colName = cm[1] ?? cm[2];
+      if (colName.startsWith("RowNumber-")) continue;
+      cols.push({ name: colName, dataType: cm[3] });
     }
     const measures: { name: string; expression: string }[] = [];
     const mRe = /measure\s+(?:'([^']+)'|(\S+))\s*=\s*([^\n]+(?:\n[\t ]+[^\n]+)*)/g;
@@ -112,19 +192,42 @@ export function listModel(pbipPath: string): {
   }
 
   const relationships: ListedRelationship[] = [];
-  const relRe = /^relationship\s+(\S+)\s*\n([\s\S]*?)(?=\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\b|\s*$)/gm;
+  const relRe = /(?:^|\n)relationship\s+(\S+)\s*\n([\s\S]*?)(?=\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\b|\n### __VIBI_FILE__|$)/g;
   let rm: RegExpExecArray | null;
   while ((rm = relRe.exec(src))) {
     const id = rm[1];
     const body = rm[2];
-    const fromTable = body.match(/fromTable:\s*(\S+)/)?.[1] ?? "";
-    const fromColumn = body.match(/fromColumn:\s*(\S+)/)?.[1] ?? "";
-    const toTable = body.match(/toTable:\s*(\S+)/)?.[1] ?? "";
-    const toColumn = body.match(/toColumn:\s*(\S+)/)?.[1] ?? "";
+    // Die zerteilten Files nutzen "fromColumn: Tabelle.Spalte" UND "toColumn: ...".
+    let fromTable = "";
+    let fromColumn = "";
+    let toTable = "";
+    let toColumn = "";
+    const fromCol = body.match(/fromColumn:\s*(\S+)/);
+    const toCol = body.match(/toColumn:\s*(\S+)/);
+    if (fromCol) {
+      const parts = fromCol[1].replace(/^'|'$/g, "").split(".");
+      if (parts.length >= 2) {
+        fromTable = parts[0].replace(/'/g, "");
+        fromColumn = parts.slice(1).join(".").replace(/'/g, "");
+      } else {
+        fromColumn = fromCol[1];
+        fromTable = body.match(/fromTable:\s*(\S+)/)?.[1] ?? "";
+      }
+    }
+    if (toCol) {
+      const parts = toCol[1].replace(/^'|'$/g, "").split(".");
+      if (parts.length >= 2) {
+        toTable = parts[0].replace(/'/g, "");
+        toColumn = parts.slice(1).join(".").replace(/'/g, "");
+      } else {
+        toColumn = toCol[1];
+        toTable = body.match(/toTable:\s*(\S+)/)?.[1] ?? "";
+      }
+    }
     relationships.push({ id, fromTable, fromColumn, toTable, toColumn });
   }
 
-  return { pbipPath, tables, relationships };
+  return { pbipPath, layout: d.layout, tables, relationships };
 }
 
 export function addMeasure(
@@ -136,13 +239,15 @@ export function addMeasure(
     formatString?: string;
     displayFolder?: string;
   }
-): { ok: true; path: string; warning?: string } {
-  const src = read(pbipPath);
-  const table = args.table;
-  const block = findBlock(src, new RegExp(`^table\\s+(?:'${escapeRegex(table)}'|${escapeRegex(table)})\\b`));
-  if (!block) throw new Error(`Tabelle '${table}' nicht in TMDL gefunden`);
-  const lines = src.split(/\r?\n/);
-  // Insert vor dem Ende des Table-Blocks
+): { ok: true; path: string } {
+  const file = findTableFile(pbipPath, args.table);
+  if (!file) throw new Error(`Tabelle '${args.table}' nicht im Modell gefunden`);
+  const block = findBlock(
+    file.content,
+    new RegExp(`^table\\s+(?:'${escapeRegex(args.table)}'|${escapeRegex(args.table)})\\b`)
+  );
+  if (!block) throw new Error(`Tabellen-Block in ${file.filePath} nicht parsbar`);
+  const lines = file.content.split(/\r?\n/);
   const insertAt = block.end;
   const expr = args.expression.includes("\n")
     ? args.expression
@@ -150,7 +255,7 @@ export function addMeasure(
         .map((l) => `\t\t${l}`)
         .join("\n")
     : `\t\t${args.expression}`;
-  const lines2 = [
+  const insert = [
     "",
     `\tmeasure '${args.name}' =`,
     expr,
@@ -158,8 +263,8 @@ export function addMeasure(
     args.displayFolder ? `\t\tdisplayFolder: ${quoteIfNeeded(args.displayFolder)}` : "",
     "",
   ].filter(Boolean);
-  lines.splice(insertAt, 0, ...lines2);
-  return { ok: true, path: write(pbipPath, joinBlock(lines)) };
+  lines.splice(insertAt, 0, ...insert);
+  return { ok: true, path: backupAndWrite(file.filePath, joinBlock(lines)) };
 }
 
 export function addRelationship(
@@ -173,21 +278,19 @@ export function addRelationship(
     isActive?: boolean;
   }
 ): { ok: true; path: string; relationshipId: string } {
-  const src = read(pbipPath);
-  // Existieren beide Tabellen?
-  const ensureTable = (n: string) => {
-    if (!new RegExp(`^table\\s+(?:'${escapeRegex(n)}'|${escapeRegex(n)})\\b`, "m").test(src)) {
-      throw new Error(`Tabelle '${n}' nicht in TMDL gefunden`);
+  const ensure = (n: string) => {
+    if (!findTableFile(pbipPath, n)) {
+      throw new Error(`Tabelle '${n}' nicht im Modell gefunden`);
     }
   };
-  ensureTable(args.fromTable);
-  ensureTable(args.toTable);
+  ensure(args.fromTable);
+  ensure(args.toTable);
   const id = randomUUID();
   const block = [
     ``,
     `relationship ${id}`,
-    `\tfromColumn: ${args.fromTable}.${args.fromColumn}`,
-    `\ttoColumn: ${args.toTable}.${args.toColumn}`,
+    `\tfromColumn: '${args.fromTable}'.'${args.fromColumn}'`,
+    `\ttoColumn: '${args.toTable}'.'${args.toColumn}'`,
     args.crossFilteringBehavior
       ? `\tcrossFilteringBehavior: ${args.crossFilteringBehavior}`
       : "",
@@ -196,9 +299,11 @@ export function addRelationship(
   ]
     .filter(Boolean)
     .join("\n");
-  // Anhängen am Ende der Datei
-  const newSrc = src.replace(/\s*$/, "\n") + block + "\n";
-  return { ok: true, path: write(pbipPath, newSrc), relationshipId: id };
+
+  const targetFile = relationshipsFilePath(pbipPath);
+  const existing = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : "";
+  const newContent = existing.replace(/\s*$/, "\n") + block + "\n";
+  return { ok: true, path: backupAndWrite(targetFile, newContent), relationshipId: id };
 }
 
 export function addDateTable(
@@ -208,12 +313,15 @@ export function addDateTable(
   const name = args?.name ?? "Date";
   const start = args?.startDate ?? "DATE(2020,1,1)";
   const end = args?.endDate ?? "DATE(2030,12,31)";
-  const src = read(pbipPath);
-  if (new RegExp(`^table\\s+(?:'${escapeRegex(name)}'|${escapeRegex(name)})\\b`, "m").test(src)) {
-    return { ok: true, path: tmdlPath(pbipPath), tableName: name };
-  }
-  const block = `
 
+  // Schon vorhanden?
+  if (findTableFile(pbipPath, name)) {
+    const existing = findTableFile(pbipPath, name);
+    return { ok: true, path: existing!.filePath, tableName: name };
+  }
+
+  const d = discoverModel(pbipPath);
+  const block = `
 table '${name}'
 \tdataCategory: Time
 
@@ -259,18 +367,51 @@ table '${name}'
 \t\t\t"YearMonth", FORMAT([Date], "YYYY-MM")
 \t\t)
 `;
-  const newSrc = src.replace(/\s*$/, "\n") + block + "\n";
-  return { ok: true, path: write(pbipPath, newSrc), tableName: name };
+
+  if (d.layout === "sharded") {
+    // Eigene Datei in tables/<Name>.tmdl
+    const tablesDir = join(d.definitionDir, "tables");
+    if (!existsSync(tablesDir)) {
+      // Fallback: in definitionDir schreiben
+      return {
+        ok: true,
+        path: backupAndWrite(join(d.definitionDir, `${name}.tmdl`), block.trimStart() + "\n"),
+        tableName: name,
+      };
+    }
+    return {
+      ok: true,
+      path: backupAndWrite(join(tablesDir, `${name}.tmdl`), block.trimStart() + "\n"),
+      tableName: name,
+    };
+  }
+
+  // single-file: an model.tmdl anhängen
+  const target = modelTmdlPath(pbipPath);
+  const src = existsSync(target) ? readFileSync(target, "utf8") : "";
+  return {
+    ok: true,
+    path: backupAndWrite(target, src.replace(/\s*$/, "\n") + block + "\n"),
+    tableName: name,
+  };
 }
 
 export function removeRelationship(pbipPath: string, id: string): { ok: boolean; path: string } {
-  const src = read(pbipPath);
+  const d = discoverModel(pbipPath);
+  if (d.layout === "none" || d.layout === "bim") {
+    return { ok: false, path: d.definitionDir };
+  }
   const re = new RegExp(
-    `\\nrelationship\\s+${escapeRegex(id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
+    `(?:^|\\n)relationship\\s+${escapeRegex(id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
     "g"
   );
-  if (!re.test(src)) return { ok: false, path: tmdlPath(pbipPath) };
-  return { ok: true, path: write(pbipPath, src.replace(re, "")) };
+  for (const f of d.files) {
+    if (re.test(f.content)) {
+      return { ok: true, path: backupAndWrite(f.path, f.content.replace(re, "")) };
+    }
+    re.lastIndex = 0;
+  }
+  return { ok: false, path: d.definitionDir };
 }
 
 function escapeRegex(s: string): string {

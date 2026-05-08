@@ -13,6 +13,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { concatenatedTmdl, discoverModel } from "./tmdl-discovery.js";
 
 interface Column {
   name: string;
@@ -275,26 +276,49 @@ export function applyFullPageHTML(pbipPath: string, html: string): string {
 
 export function readMetadata(pbipPath: string): {
   tables: { name: string; columns: { name: string; dataType: string }[] }[];
+  layout?: string;
 } {
-  // pbipPath = .../Project/Project.pbip
-  const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
-  const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
-  const tmdlPath = join(projectDir, `${projName}.SemanticModel`, "definition", "model.tmdl");
-  if (!existsSync(tmdlPath)) return { tables: [] };
-  const txt = readFileSync(tmdlPath, "utf8");
-  const tableRegex = /table '([^']+)'([\s\S]*?)(?=\ntable '|$)/g;
-  const colRegex = /column '([^']+)'\s*\n\s*dataType:\s*(\w+)/g;
+  const d = discoverModel(pbipPath);
+
+  // Legacy .bim → JSON parse
+  if (d.layout === "bim" && d.bimJson) {
+    const json = d.bimJson as { model?: { tables?: Array<{ name: string; columns?: Array<{ name: string; dataType?: string }> }> } };
+    const m = json.model ?? json;
+    const tables = ((m as { tables?: Array<{ name: string; columns?: Array<{ name: string; dataType?: string }> }> }).tables ?? [])
+      .filter((t) => !t.name.startsWith("DateTableTemplate") && !t.name.startsWith("LocalDateTable"))
+      .map((t) => ({
+        name: t.name,
+        columns: (t.columns ?? [])
+          .filter((c) => !c.name.startsWith("RowNumber-"))
+          .map((c) => ({ name: c.name, dataType: c.dataType ?? "unknown" })),
+      }));
+    return { tables, layout: d.layout };
+  }
+
+  if (d.layout === "none") return { tables: [], layout: d.layout };
+
+  // TMDL kann sowohl in einer Datei (viBI's writePBIP) als auch zerteilt
+  // (PBI Desktop's Speicher-Format) vorliegen. concatenatedTmdl klebt alles
+  // zusammen, damit ein einziger Pass über alle Tabellen geht.
+  const txt = concatenatedTmdl(d);
+  // Tabellen-Header: `table 'Name'` ODER `table Name`
+  const tableRegex = /(?:^|\n)table\s+(?:'([^']+)'|(\S+))([\s\S]*?)(?=\ntable\s+(?:'[^']+'|\S+)|\n### __VIBI_FILE__|$)/g;
+  const colRegex = /column\s+(?:'([^']+)'|(\S+))[\s\S]*?dataType:\s*(\w+)/g;
   const tables: { name: string; columns: { name: string; dataType: string }[] }[] = [];
   let m: RegExpExecArray | null;
   while ((m = tableRegex.exec(txt))) {
-    const name = m[1];
-    const body = m[2];
+    const name = m[1] ?? m[2];
+    const body = m[3];
     const cols: { name: string; dataType: string }[] = [];
     let cm: RegExpExecArray | null;
     while ((cm = colRegex.exec(body))) {
-      cols.push({ name: cm[1], dataType: cm[2] });
+      const colName = cm[1] ?? cm[2];
+      if (colName.startsWith("RowNumber-")) continue;
+      cols.push({ name: colName, dataType: cm[3] });
     }
-    tables.push({ name, columns: cols });
+    if (!name.startsWith("DateTableTemplate") && !name.startsWith("LocalDateTable")) {
+      tables.push({ name, columns: cols });
+    }
   }
-  return { tables };
+  return { tables, layout: d.layout };
 }
