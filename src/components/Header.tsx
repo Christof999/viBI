@@ -73,6 +73,12 @@ export function Header({ status, toolCount, onRefresh, project, phase, onRestart
           dim={!ok}
         />
         <StatusPill
+          label="MS PBI Remote"
+          ok={!!status?.mcp?.remote}
+          dim={!ok}
+          optional
+        />
+        <StatusPill
           label="Fabric MCP"
           ok={!!status?.mcp?.fabric}
           dim={!ok}

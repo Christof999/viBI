@@ -14,6 +14,7 @@ import {
   removeRelationship,
 } from "./tmdl.js";
 import { looksLikeViBIPlaceholder, readLiveModel } from "./live-model.js";
+import { bestPbipFor, findRecentPbips } from "./pbip-discovery.js";
 
 export interface BuiltInTool {
   name: string;
@@ -30,43 +31,28 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "read_pbip_metadata",
     description:
-      "Liest Tabellen, Spalten und Datentypen aus dem aktuell offenen PBIP-Bericht (Power BI Project). Verwende dies, um zu sehen, welche Tabellen der Nutzer bereits in Power BI geladen hat. Wenn pbipPath nicht angegeben wird, nimm den im System-Prompt genannten aktuellen Bericht-Pfad.",
+      "Liest Tabellen, Spalten und Datentypen aus dem PBIP-Bericht des Users. Sucht automatisch in den Standard-Speicherorten (Documents, OneDrive, Desktop, C:/PowerBI), wenn der direkte Pfad leer/Platzhalter zurückgibt. Verwendet zuerst den Power-BI-Desktop-Live-Workspace, fällt dann auf TMDL-Dateien zurück.",
     inputSchema: {
       type: "object",
       properties: {
         pbipPath: {
           type: "string",
-          description: "Vollständiger Pfad zur .pbip-Datei (z.B. C:/PowerBI/viBI/Bericht/Bericht.pbip).",
+          description: "Optional: vollständiger Pfad zur .pbip-Datei.",
+        },
+        projectName: {
+          type: "string",
+          description: "Optional: Bericht-Name als Hint für die Auto-Discovery.",
         },
       },
     },
     async handler(args) {
-      let path = str(args.pbipPath);
-      if (!path) {
-        // Fallback: nimm das zuletzt benutzte Projekt aus der Bibliothek
-        const lib = loadLibrary();
-        const candidates = [...lib.projects].sort(
-          (a, b) =>
-            new Date(b.lastOpenedAt ?? b.createdAt).getTime() -
-            new Date(a.lastOpenedAt ?? a.createdAt).getTime()
-        );
-        const fallback = candidates.find((p) => p.pbipPath && existsSync(p.pbipPath));
-        if (!fallback) {
-          throw new Error(
-            "pbipPath fehlt und es gibt kein offenes Projekt in der viBI-Bibliothek."
-          );
-        }
-        path = fallback.pbipPath;
-      }
-      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+      const explicit = str(args.pbipPath);
+      const projectName = str(args.projectName);
 
-      // Bevorzugt: Live-Workspace von Power BI Desktop. Das ist die einzige
-      // verlässliche Quelle, wenn der User Tabellen geladen aber NICHT
-      // gespeichert hat. Erst wenn das fehlschlägt, fällt auf die TMDL zurück.
+      // 1) Live-Workspace ist immer der beste Truthwert (egal ob gespeichert).
       const live = readLiveModel();
       if (live.source === "live-workspace" && live.tables.length > 0) {
         return {
-          pbipPath: path,
           source: "live-workspace",
           workspacePath: live.workspacePath,
           tables: live.tables.map((t) => ({
@@ -78,20 +64,78 @@ export const builtInTools: BuiltInTool[] = [
         };
       }
 
-      const meta = readMetadata(path);
-      const placeholder = looksLikeViBIPlaceholder(meta.tables);
+      // 2) Den explizit gegebenen Pfad probieren – wenn der Real-Daten liefert, gut.
+      const tryPath = (p: string): { ok: boolean; tables: { name: string }[]; payload: Record<string, unknown> } => {
+        if (!existsSync(p)) return { ok: false, tables: [], payload: { error: "Pfad existiert nicht: " + p } };
+        const meta = readMetadata(p);
+        const isPlaceholder = looksLikeViBIPlaceholder(meta.tables);
+        const ok = meta.tables.length > 0 && !isPlaceholder;
+        return {
+          ok,
+          tables: meta.tables,
+          payload: { pbipPath: p, source: "tmdl", layout: meta.layout, ...meta, isPlaceholder },
+        };
+      };
+
+      const tried: string[] = [];
+      if (explicit) {
+        tried.push(explicit);
+        const r = tryPath(explicit);
+        if (r.ok) return r.payload;
+      }
+
+      // 3) Auto-Discovery: alle .pbip aus den letzten 14 Tagen unter Documents/OneDrive/Desktop/C:\PowerBI
+      const candidates = findRecentPbips({ nameContains: projectName });
+      const ordered = projectName ? [bestPbipFor(projectName), ...candidates].filter(Boolean) : candidates;
+      for (const c of ordered) {
+        if (!c) continue;
+        if (tried.includes(c.path)) continue;
+        tried.push(c.path);
+        const r = tryPath(c.path);
+        if (r.ok) {
+          return {
+            ...r.payload,
+            note:
+              "Pfad automatisch gefunden via Auto-Discovery (Documents/OneDrive/Desktop). Falls das nicht der gewünschte Bericht ist, gib pbipPath explizit an.",
+          };
+        }
+      }
+
+      // 4) Nichts gefunden → klare Fehlermeldung
+      const candidatesList = candidates.slice(0, 8).map((c) => `${c.path} (${new Date(c.mtimeMs).toLocaleString("de-DE")})`);
       return {
-        pbipPath: path,
-        source: "tmdl",
-        ...meta,
-        ...(placeholder
-          ? {
-              placeholderWarning:
-                "ACHTUNG: Diese TMDL enthält nur den viBI-Platzhalter (Tabelle 'Sales' mit Date/Region). Das bedeutet: der User hat in Power BI Desktop entweder den .pbip noch nicht geöffnet ODER hat zwar Daten importiert, aber NICHT gespeichert. Die echten Tabellen sind viBI nicht zugänglich. Sage dem User WÖRTLICH: 'Bitte öffne in Power BI Desktop die Datei " +
-                path +
-                ", lade dort deine Tabellen UND drücke danach Strg+S. Erst dann kann ich auf das echte Modell zugreifen.' Erfinde KEINE Tabellen.",
-            }
-          : {}),
+        source: "none",
+        triedPaths: tried,
+        candidatesFound: candidatesList,
+        message:
+          candidatesList.length === 0
+            ? "Keine .pbip-Dateien in den letzten 14 Tagen unter Documents, OneDrive, Desktop oder C:/PowerBI gefunden. Stelle sicher, dass Power BI Desktop läuft und der Bericht gespeichert ist (Strg+S), oder gib pbipPath explizit an."
+            : "Nur Platzhalter oder leere Modelle gefunden. Mögliche Kandidaten siehe candidatesFound – bitte User fragen, welcher der richtige Pfad ist.",
+      };
+    },
+  },
+  {
+    name: "find_pbips",
+    description:
+      "Listet alle .pbip-Dateien aus den letzten 14 Tagen, die unter Documents, OneDrive, Desktop oder C:/PowerBI liegen. Nützlich, wenn unklar ist, wo der User seinen Bericht gespeichert hat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        nameContains: {
+          type: "string",
+          description: "Optional: nur Berichte, deren Datei-Name diesen Substring enthält (case insensitive).",
+        },
+      },
+    },
+    async handler(args) {
+      const list = findRecentPbips({ nameContains: str(args.nameContains) });
+      return {
+        count: list.length,
+        pbips: list.map((p) => ({
+          path: p.path,
+          name: p.name,
+          lastModified: new Date(p.mtimeMs).toISOString(),
+        })),
       };
     },
   },

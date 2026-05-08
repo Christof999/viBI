@@ -64,6 +64,7 @@ app.get("/status", (_req, res) => {
     mcp: {
       fabric: mcpRegistry.isConnected("fabric"),
       custom: mcpRegistry.isConnected("custom"),
+      remote: mcpRegistry.isConnected("remote"),
     },
   });
 });

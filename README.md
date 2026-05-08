@@ -130,6 +130,10 @@ ALLOWED_WRITE_ROOTS=C:/PowerBI
 # FABRIC_MCP_ARGS=-y @microsoft/mcp-fabric
 # CUSTOM_MCP_COMMAND=node
 # CUSTOM_MCP_ARGS=../mcp-server/dist/index.js
+# Microsoft Power BI Remote MCP (offizieller, gehosteter Server):
+# REMOTE_MCP_URL=https://<endpoint-aus-MS-docs>
+# REMOTE_MCP_AUTH=Bearer <Entra-Access-Token>
+# Anleitung: https://learn.microsoft.com/de-de/power-bi/developer/mcp/remote-mcp-server-get-started
 ```
 
 ### 3. Lokal starten

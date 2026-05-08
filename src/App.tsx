@@ -86,8 +86,9 @@ export default function App() {
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
       `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
       `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).\n\n` +
-      `DATENQUELLEN-LOGIK: Tools liefern in 'source' entweder 'live-workspace' (PBI Desktop hat den Bericht aktuell offen, das Modell ist live) oder 'tmdl' (gelesen aus der gespeicherten Datei). ` +
-      `Wenn ein Tool 'placeholderWarning' zurückgibt: das Modell ist NUR der viBI-Stub. Du sagst dem User in EINEM Satz, dass er den .pbip in PBI Desktop öffnen, Tabellen laden UND mit Strg+S speichern muss – dann rufst du die Tools NICHT erneut auf, bis er bestätigt. Erfinde NIE Tabellen, die nicht in 'tables' stehen.`;
+      `DATENQUELLEN-LOGIK: Tools liefern in 'source' entweder 'live-workspace' (PBI Desktop hat den Bericht aktuell offen) oder 'tmdl' (gelesen aus der Datei). ` +
+      `Wenn read_pbip_metadata 'source' = 'none' liefert oder isPlaceholder=true zurückgibt: rufe SOFORT find_pbips auf (mit nameContains=Projektname), schau in das Ergebnis und wähle den .pbip mit dem passenden Namen. Erst wenn auch find_pbips leer ist, sage dem User, dass er Strg+S in PBI Desktop drücken soll. ` +
+      `Erfinde NIE Tabellen, die nicht in einem Tool-Resultat 'tables' stehen.`;
     chat.setExtraSystemPrompt(ctx);
     chat.setToolArgDefaults({
       pbipPath: state.pbipPath,

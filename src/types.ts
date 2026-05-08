@@ -19,7 +19,7 @@ export interface HelperStatus {
   ok: boolean;
   version?: string;
   powerBIDesktopFound?: boolean;
-  mcp?: { fabric: boolean; custom: boolean };
+  mcp?: { fabric: boolean; custom: boolean; remote?: boolean };
   error?: string;
 }
 
