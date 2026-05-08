@@ -256,7 +256,18 @@ export function addMeasure(
   }
 ): { ok: true; path: string } {
   const file = findTableFile(pbipPath, args.table);
-  if (!file) throw new Error(`Tabelle '${args.table}' nicht im Modell gefunden`);
+  if (!file) {
+    let availableTables = "(unbekannt)";
+    try {
+      availableTables = listModel(pbipPath).tables.map((t) => t.name).join(", ") || "(keine)";
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Tabelle '${args.table}' nicht im Modell gefunden. Vorhandene Tabellen: ${availableTables}. ` +
+        `Rufe list_model auf, um die echten Tabellennamen zu sehen.`
+    );
+  }
   const block = findBlock(
     file.content,
     new RegExp(`^table\\s+(?:'${escapeRegex(args.table)}'|${escapeRegex(args.table)})\\b`)
@@ -310,13 +321,47 @@ export function addRelationship(
   forcedInactive?: boolean;
   forcedInactiveBecauseOf?: string;
 } {
-  const ensure = (n: string) => {
-    if (!findTableFile(pbipPath, n)) {
-      throw new Error(`Tabelle '${n}' nicht im Modell gefunden`);
+  // Spaltenexistenz validieren – verhindert die häufigste Fehlerklasse:
+  // KI halluziniert Spaltennamen (z.B. "OrderID" wo die echte Spalte
+  // "[id]" oder "Order Number" heißt). Die Beziehung würde sonst stumm
+  // geschrieben, beim Reload kracht PBI Desktop. Lieber hier hart abbrechen
+  // mit einer Liste der tatsächlichen Spalten, damit die KI nachfragen
+  // oder direkt korrigieren kann.
+  let snapshot;
+  try {
+    snapshot = listModel(pbipPath);
+  } catch {
+    snapshot = { tables: [], relationships: [] };
+  }
+  const findCol = (tableName: string, columnName: string) => {
+    const tbl = snapshot.tables.find((t) => t.name === tableName);
+    if (!tbl) {
+      throw new Error(
+        `Tabelle '${tableName}' nicht im Modell gefunden. ` +
+          `Vorhandene Tabellen: ${snapshot.tables.map((t) => t.name).join(", ") || "(keine)"}.`
+      );
+    }
+    if (!tbl.columns.find((c) => c.name === columnName)) {
+      throw new Error(
+        `Spalte '${columnName}' existiert nicht in Tabelle '${tableName}'. ` +
+          `Vorhandene Spalten: ${tbl.columns.map((c) => c.name).join(", ") || "(keine)"}. ` +
+          `Rufe list_model erneut auf, um die echten Spaltennamen zu sehen, bevor du eine Beziehung anlegst.`
+      );
     }
   };
-  ensure(args.fromTable);
-  ensure(args.toTable);
+  if (snapshot.tables.length > 0) {
+    findCol(args.fromTable, args.fromColumn);
+    findCol(args.toTable, args.toColumn);
+  } else {
+    // Fallback: zumindest Tabellen-Existenz prüfen
+    const ensure = (n: string) => {
+      if (!findTableFile(pbipPath, n)) {
+        throw new Error(`Tabelle '${n}' nicht im Modell gefunden`);
+      }
+    };
+    ensure(args.fromTable);
+    ensure(args.toTable);
+  }
 
   // Beziehungs-Logik:
   //  1) exaktes Spaltenpaar schon da → skip
@@ -327,7 +372,7 @@ export function addRelationship(
   let forcedInactive = false;
   let inactivatedBecauseOf: string | null = null;
   try {
-    const existing = listModel(pbipPath).relationships;
+    const existing = snapshot.relationships;
     const samePair = existing.find(
       (r) =>
         (r.fromTable === args.fromTable &&
@@ -401,21 +446,44 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   path: string;
   deactivatedCount: number;
   removedCount: number;
+  brokenRemovedCount: number;
   log: string[];
 } {
   const d = discoverModel(pbipPath);
   if (d.layout === "none" || d.layout === "bim") {
-    return { ok: false, path: d.definitionDir, deactivatedCount: 0, removedCount: 0, log: [] };
+    return {
+      ok: false,
+      path: d.definitionDir,
+      deactivatedCount: 0,
+      removedCount: 0,
+      brokenRemovedCount: 0,
+      log: [],
+    };
   }
   const model = listModel(pbipPath);
   const log: string[] = [];
   let deactivated = 0;
   let removed = 0;
+  let brokenRemoved = 0;
 
-  // Schritt 1: exakte Duplikate finden (gleiche Spaltenpaare)
+  // Schritt 0: Orphaned Beziehungen finden (referenzieren nicht-existente
+  // Tabellen oder Spalten). Diese werden komplett entfernt.
+  const tableMap = new Map(model.tables.map((t) => [t.name, t]));
+  const orphaned: ListedRelationship[] = [];
+  for (const r of model.relationships) {
+    const fromT = tableMap.get(r.fromTable);
+    const toT = tableMap.get(r.toTable);
+    const fromOk = fromT && fromT.columns.some((c) => c.name === r.fromColumn);
+    const toOk = toT && toT.columns.some((c) => c.name === r.toColumn);
+    if (!fromOk || !toOk) orphaned.push(r);
+  }
+
+  // Schritt 1: exakte Duplikate finden (gleiche Spaltenpaare) – aber nur
+  // unter den Beziehungen, die noch nicht als orphaned markiert sind.
   const seenPair = new Map<string, ListedRelationship>();
   const exactDups: ListedRelationship[] = [];
   for (const r of model.relationships) {
+    if (orphaned.includes(r)) continue;
     const key = [
       [r.fromTable, r.fromColumn].join("|"),
       [r.toTable, r.toColumn].join("|"),
@@ -430,7 +498,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   const activePerPair = new Map<string, ListedRelationship>();
   const toDeactivate: ListedRelationship[] = [];
   for (const r of model.relationships) {
-    if (exactDups.includes(r)) continue;
+    if (orphaned.includes(r) || exactDups.includes(r)) continue;
     if (!r.isActive) continue;
     const tablesKey = [r.fromTable, r.toTable].sort().join("=");
     if (activePerPair.has(tablesKey)) {
@@ -444,6 +512,20 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   for (const f of d.files) {
     let content = f.content;
     let changed = false;
+    for (const orph of orphaned) {
+      const re = new RegExp(
+        `(?:^|\\n)relationship\\s+${escapeRegex(orph.id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
+        "g"
+      );
+      if (re.test(content)) {
+        content = content.replace(re, "");
+        log.push(
+          `✗ Orphaned Beziehung ${orph.id} entfernt (${orph.fromTable}.${orph.fromColumn} → ${orph.toTable}.${orph.toColumn} – Spalte/Tabelle existiert nicht)`
+        );
+        brokenRemoved++;
+        changed = true;
+      }
+    }
     for (const dup of exactDups) {
       const re = new RegExp(
         `(?:^|\\n)relationship\\s+${escapeRegex(dup.id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
@@ -480,6 +562,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
     path: d.definitionDir,
     deactivatedCount: deactivated,
     removedCount: removed,
+    brokenRemovedCount: brokenRemoved,
     log,
   };
 }
@@ -496,7 +579,17 @@ export function addCalculatedColumn(
   }
 ): { ok: true; path: string } {
   const file = findTableFile(pbipPath, args.table);
-  if (!file) throw new Error(`Tabelle '${args.table}' nicht im Modell gefunden`);
+  if (!file) {
+    let availableTables = "(unbekannt)";
+    try {
+      availableTables = listModel(pbipPath).tables.map((t) => t.name).join(", ") || "(keine)";
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Tabelle '${args.table}' nicht gefunden. Vorhandene Tabellen: ${availableTables}.`
+    );
+  }
   const block = findBlock(
     file.content,
     new RegExp(`^table\\s+(?:'${escapeRegex(args.table)}'|${escapeRegex(args.table)})\\b`)

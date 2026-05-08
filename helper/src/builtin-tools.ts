@@ -355,16 +355,16 @@ export const builtInTools: BuiltInTool[] = [
       if (!path) throw new Error("pbipPath erforderlich");
       if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
       const r = fixAmbiguousRelationships(path);
-      const total = r.deactivatedCount + r.removedCount;
+      const total = r.deactivatedCount + r.removedCount + r.brokenRemovedCount;
       return {
         ...r,
         summary:
           total === 0
-            ? "Keine Probleme gefunden – Beziehungen sind eindeutig."
-            : `Repariert: ${r.removedCount} Duplikat(e) entfernt, ${r.deactivatedCount} aktive Beziehung(en) auf inactive gesetzt.`,
+            ? "Keine Probleme gefunden – Beziehungen sind eindeutig und valide."
+            : `Repariert: ${r.brokenRemovedCount} orphan, ${r.removedCount} Duplikat(e), ${r.deactivatedCount} aktive auf inactive gesetzt.`,
         reloadHint:
           total > 0
-            ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen – die mehrdeutigen Pfade sollten weg sein."
+            ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen – die Probleme sollten weg sein."
             : undefined,
       };
     },
@@ -626,6 +626,26 @@ export const builtInTools: BuiltInTool[] = [
         .filter(([, n]) => n > 1)
         .map(([k, n]) => ({ tablePair: k.replace("=", " ↔ "), activeCount: n }));
 
+      // Beziehungen mit nicht existierenden Tabellen/Spalten finden – die
+      // sind die häufigste Ursache für PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH-
+      // ähnliche Loadfehler (PBI verwirft die Beziehung dann nicht stumm,
+      // sondern probiert Auto-Detection und scheitert).
+      const tableMap = new Map(model.tables.map((t) => [t.name, t]));
+      const brokenRelationships = model.relationships
+        .map((r) => {
+          const fromT = tableMap.get(r.fromTable);
+          const toT = tableMap.get(r.toTable);
+          const issues: string[] = [];
+          if (!fromT) issues.push(`fromTable '${r.fromTable}' fehlt`);
+          else if (!fromT.columns.find((c) => c.name === r.fromColumn))
+            issues.push(`Spalte '${r.fromTable}'.'${r.fromColumn}' fehlt`);
+          if (!toT) issues.push(`toTable '${r.toTable}' fehlt`);
+          else if (!toT.columns.find((c) => c.name === r.toColumn))
+            issues.push(`Spalte '${r.toTable}'.'${r.toColumn}' fehlt`);
+          return issues.length ? { id: r.id, issues } : null;
+        })
+        .filter(Boolean);
+
       // Datumstabelle gültig? (Date-Spalte vom Typ dateTime mit isKey, plus
       // mind. 3 weitere Spalten Year/Month/o.ä.)
       const dateTable = model.tables.find((t) => t.name === "Date");
@@ -643,7 +663,8 @@ export const builtInTools: BuiltInTool[] = [
         allRelsOk &&
         allMeasuresOk &&
         duplicates === 0 &&
-        ambiguousPaths.length === 0;
+        ambiguousPaths.length === 0 &&
+        brokenRelationships.length === 0;
 
       const summaryLines: string[] = [];
       if (tableChecks.length) {
@@ -665,6 +686,11 @@ export const builtInTools: BuiltInTool[] = [
           `🚨 ${ambiguousPaths.length} mehrdeutige Pfad(e) – ruf fix_ambiguous_relationships auf`
         );
       }
+      if (brokenRelationships.length > 0) {
+        summaryLines.push(
+          `🚨 ${brokenRelationships.length} Beziehung(en) referenzieren nicht-existierende Spalten – ruf fix_ambiguous_relationships auf, um sie zu entfernen`
+        );
+      }
 
       return {
         ok: overall,
@@ -675,6 +701,7 @@ export const builtInTools: BuiltInTool[] = [
         dateTableOk: dateOk,
         duplicateRelationships: duplicates,
         ambiguousPaths,
+        brokenRelationships,
         actualTables: model.tables.map((t) => t.name),
         actualRelationships: model.relationships.map(
           (r) =>
