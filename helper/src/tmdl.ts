@@ -230,6 +230,18 @@ export function listModel(pbipPath: string): {
   return { pbipPath, layout: d.layout, tables, relationships };
 }
 
+// TMDL-Helfer für Strings + Identifier
+function tmdlString(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function tmdlIdent(s: string): string {
+  // einfache Identifier (Buchstaben/Ziffern/Unterstrich/Bindestrich) ohne Quotes;
+  // alles andere in einfache Quotes packen, mit Verdoppelung als Escape.
+  if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(s)) return s;
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
 export function addMeasure(
   pbipPath: string,
   args: {
@@ -249,20 +261,30 @@ export function addMeasure(
   if (!block) throw new Error(`Tabellen-Block in ${file.filePath} nicht parsbar`);
   const lines = file.content.split(/\r?\n/);
   const insertAt = block.end;
-  const expr = args.expression.includes("\n")
-    ? args.expression
-        .split(/\r?\n/)
-        .map((l) => `\t\t${l}`)
-        .join("\n")
-    : `\t\t${args.expression}`;
-  const insert = [
-    "",
-    `\tmeasure '${args.name}' =`,
-    expr,
-    args.formatString ? `\t\tformatString: ${quoteIfNeeded(args.formatString)}` : "",
-    args.displayFolder ? `\t\tdisplayFolder: ${quoteIfNeeded(args.displayFolder)}` : "",
-    "",
-  ].filter(Boolean);
+
+  const expr = args.expression.trim();
+  const properties: string[] = [];
+  if (args.formatString) properties.push(`\t\tformatString: ${tmdlString(args.formatString)}`);
+  if (args.displayFolder) properties.push(`\t\tdisplayFolder: ${tmdlIdent(args.displayFolder)}`);
+
+  let insert: string[];
+  if (!expr.includes("\n")) {
+    // Single-line: Ausdruck DIREKT auf der `=`-Zeile, sonst frisst der Parser
+    // Properties wie formatString/displayFolder als Fortsetzung der DAX.
+    insert = ["", `\tmeasure '${args.name}' = ${expr}`, ...properties, ""];
+  } else {
+    // Multi-line: Triple-Backtick-Fence. Inhalt im Fence wird vom Parser
+    // verbatim gelesen; Properties stehen erst NACH dem schließenden Fence.
+    const exprLines = expr.split(/\r?\n/);
+    insert = [
+      "",
+      `\tmeasure '${args.name}' = \`\`\``,
+      ...exprLines.map((l) => `\t\t${l}`),
+      `\t\t\`\`\``,
+      ...properties,
+      "",
+    ];
+  }
   lines.splice(insertAt, 0, ...insert);
   return { ok: true, path: backupAndWrite(file.filePath, joinBlock(lines)) };
 }
@@ -321,6 +343,9 @@ export function addDateTable(
   }
 
   const d = discoverModel(pbipPath);
+  // Calculated-Table: Spalten kommen automatisch aus ADDCOLUMNS (kein
+  // sourceColumn nötig). Multi-Zeilen-DAX MUSS in einem Triple-Backtick-Fence
+  // stehen, sonst frisst der TMDL-Parser anschließende Properties als DAX.
   const block = `
 table '${name}'
 \tdataCategory: Time
@@ -329,43 +354,40 @@ table '${name}'
 \t\tdataType: dateTime
 \t\tisKey
 \t\tsummarizeBy: none
-\t\tsourceColumn: [Date]
+\t\tformatString: "General Date"
 
 \tcolumn 'Year'
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tsourceColumn: [Year]
 
 \tcolumn 'Quarter'
 \t\tdataType: string
 \t\tsummarizeBy: none
-\t\tsourceColumn: [Quarter]
 
 \tcolumn 'Month'
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tsourceColumn: [Month]
 
 \tcolumn 'MonthName'
 \t\tdataType: string
 \t\tsummarizeBy: none
-\t\tsourceColumn: [MonthName]
 
 \tcolumn 'YearMonth'
 \t\tdataType: string
 \t\tsummarizeBy: none
-\t\tsourceColumn: [YearMonth]
 
-\tpartition '${name}-Partition' = calculated
+\tpartition '${name}' = calculated
 \t\tmode: import
-\t\tsource = ADDCOLUMNS(
-\t\t\tCALENDAR(${start}, ${end}),
-\t\t\t"Year", YEAR([Date]),
-\t\t\t"Quarter", "Q" & FORMAT([Date], "Q"),
-\t\t\t"Month", MONTH([Date]),
-\t\t\t"MonthName", FORMAT([Date], "MMMM"),
-\t\t\t"YearMonth", FORMAT([Date], "YYYY-MM")
-\t\t)
+\t\tsource = \`\`\`
+ADDCOLUMNS(
+\tCALENDAR(${start}, ${end}),
+\t"Year", YEAR([Date]),
+\t"Quarter", "Q" & FORMAT([Date], "Q"),
+\t"Month", MONTH([Date]),
+\t"MonthName", FORMAT([Date], "MMMM"),
+\t"YearMonth", FORMAT([Date], "YYYY-MM")
+)
+\`\`\`
 `;
 
   if (d.layout === "sharded") {
@@ -418,7 +440,3 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function quoteIfNeeded(s: string): string {
-  // TMDL erlaubt einige Werte ohne Quotes. Sicherer: in Quotes.
-  return s.includes('"') ? `'${s.replace(/'/g, "''")}'` : `"${s}"`;
-}
