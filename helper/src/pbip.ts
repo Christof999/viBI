@@ -85,20 +85,46 @@ in
   );
 }
 
-function defaultStarterTable(name: string): Table {
-  return {
-    name: "Sales",
-    columns: [
-      { name: "Date", dataType: "dateTime" },
-      { name: "Region", dataType: "string" },
-      { name: name || "Revenue", dataType: "double" },
-    ],
-    rows: [
-      { Date: "2026-01-01", Region: "EU", [name || "Revenue"]: 12450.5 },
-      { Date: "2026-01-02", Region: "US", [name || "Revenue"]: 9870.0 },
-      { Date: "2026-01-03", Region: "APAC", [name || "Revenue"]: 5432.1 },
-    ],
-  };
+// Default-TMDL beim Anlegen eines Projekts: nur eine Datumstabelle, KEINE
+// Stub-„Sales"-Tabelle mehr. Die echten Faktentabellen importiert der User
+// in PBI Desktop selbst (Daten abrufen → BC/OData/...).
+function defaultDateTableTmdl(): string {
+  return `table 'Date'
+\tdataCategory: Time
+
+\tcolumn Date
+\t\tdataType: dateTime
+\t\tisKey
+\t\tsummarizeBy: none
+\t\tsourceColumn: [Date]
+\t\tformatString: "General Date"
+
+\tcolumn Year = YEAR([Date])
+\t\tdataType: int64
+\t\tsummarizeBy: none
+\t\tformatString: "0"
+
+\tcolumn Quarter = "Q" & FORMAT([Date], "Q")
+\t\tdataType: string
+\t\tsummarizeBy: none
+
+\tcolumn Month = MONTH([Date])
+\t\tdataType: int64
+\t\tsummarizeBy: none
+\t\tformatString: "0"
+
+\tcolumn MonthName = FORMAT([Date], "MMMM")
+\t\tdataType: string
+\t\tsummarizeBy: none
+
+\tcolumn YearMonth = FORMAT([Date], "yyyy-MM")
+\t\tdataType: string
+\t\tsummarizeBy: none
+
+\tpartition 'Date' = calculated
+\t\tmode: import
+\t\tsource = CALENDAR(DATE(2020,1,1), DATE(2030,12,31))
+`;
 }
 
 // Page dimensions (PowerBI Standard 16:9)
@@ -204,17 +230,18 @@ export function writePBIP(projectDir: string, project: Project): string {
     JSON.stringify({ version: "4.0", settings: {} }, null, 2)
   );
 
-  // model.tmdl with at least one starter table per KPI (or default)
-  const tables: Table[] =
-    project.tables && project.tables.length
-      ? project.tables
-      : (project.kpis?.length
-          ? project.kpis.slice(0, 1).map((k) => defaultStarterTable(k))
-          : [defaultStarterTable("Revenue")]);
+  // Default-Modell: KEINE Stub-Daten-Tabelle. Stattdessen direkt eine
+  // kalkulierte Datumstabelle, weil die in 95% aller Bericht-Use-Cases
+  // benötigt wird. Custom-Tables (project.tables) werden weiterhin direkt
+  // ausgeschrieben, falls jemand sie programmatisch übergibt.
+  const customTables: Table[] = project.tables ?? [];
+  const tableSection = customTables.length
+    ? customTables.map(tmdlForTable).join("\n\n")
+    : defaultDateTableTmdl();
 
   const tmdl =
     `model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\n` +
-    tables.map(tmdlForTable).join("\n\n");
+    tableSection;
   writeFileSync(join(semDefDir, "model.tmdl"), tmdl);
 
   // Report definition.pbir + report.json + theme

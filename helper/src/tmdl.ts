@@ -299,7 +299,7 @@ export function addRelationship(
     crossFilteringBehavior?: "automatic" | "bothDirections" | "oneDirection";
     isActive?: boolean;
   }
-): { ok: true; path: string; relationshipId: string } {
+): { ok: true; path: string; relationshipId: string; alreadyExisted?: boolean } {
   const ensure = (n: string) => {
     if (!findTableFile(pbipPath, n)) {
       throw new Error(`Tabelle '${n}' nicht im Modell gefunden`);
@@ -307,6 +307,37 @@ export function addRelationship(
   };
   ensure(args.fromTable);
   ensure(args.toTable);
+
+  // Duplikat-Schutz: prüfe alle bestehenden Beziehungen, bevor eine neue
+  // angelegt wird. Beziehungen sind ungerichtet im Sinne der Eindeutigkeit –
+  // (Sales.CustomerID -> Customer.ID) und (Customer.ID -> Sales.CustomerID)
+  // gelten als gleich.
+  try {
+    const existing = listModel(pbipPath).relationships;
+    const same = (
+      r: { fromTable: string; fromColumn: string; toTable: string; toColumn: string }
+    ) =>
+      (r.fromTable === args.fromTable &&
+        r.fromColumn === args.fromColumn &&
+        r.toTable === args.toTable &&
+        r.toColumn === args.toColumn) ||
+      (r.fromTable === args.toTable &&
+        r.fromColumn === args.toColumn &&
+        r.toTable === args.fromTable &&
+        r.toColumn === args.fromColumn);
+    const dup = existing.find(same);
+    if (dup) {
+      return {
+        ok: true,
+        path: relationshipsFilePath(pbipPath),
+        relationshipId: dup.id,
+        alreadyExisted: true,
+      };
+    }
+  } catch {
+    /* listModel-Fehler tolerieren – dann wird halt geschrieben */
+  }
+
   const id = randomUUID();
   const block = [
     ``,
@@ -323,8 +354,8 @@ export function addRelationship(
     .join("\n");
 
   const targetFile = relationshipsFilePath(pbipPath);
-  const existing = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : "";
-  const newContent = existing.replace(/\s*$/, "\n") + block + "\n";
+  const existingContent = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : "";
+  const newContent = existingContent.replace(/\s*$/, "\n") + block + "\n";
   return { ok: true, path: backupAndWrite(targetFile, newContent), relationshipId: id };
 }
 

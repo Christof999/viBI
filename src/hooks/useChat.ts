@@ -40,10 +40,11 @@ export function useChat(tools: MCPTool[]) {
       setMessages(next);
       setBusy(true);
 
+      const MAX_STEPS = 8;
+      let producedAnyText = false;
       try {
         let working = next;
-        // Simple agent loop: model -> optional tool calls -> model
-        for (let step = 0; step < 4; step++) {
+        for (let step = 0; step < MAX_STEPS; step++) {
           const resp = await callChat({
             messages: toApiMessages(working),
             tools,
@@ -53,6 +54,7 @@ export function useChat(tools: MCPTool[]) {
           });
 
           if (resp.text) {
+            producedAnyText = true;
             const botMsg: ChatMessage = {
               id: uid(),
               role: "model",
@@ -63,6 +65,20 @@ export function useChat(tools: MCPTool[]) {
           }
 
           if (!resp.toolCalls || resp.toolCalls.length === 0) break;
+          if (step === MAX_STEPS - 1) {
+            // Letzter Loop-Durchlauf: KI hat noch Tool-Aufrufe geplant, aber wir
+            // brechen ab, sonst läuft das endlos. Sichtbarer Hinweis im Chat.
+            const stop: ChatMessage = {
+              id: uid(),
+              role: "model",
+              content:
+                `_(Maximale Tool-Aufruf-Tiefe (${MAX_STEPS}) erreicht – breche ab. ` +
+                `Wenn du willst, dass ich weitermache, sag mir kurz „weiter".)_`,
+            };
+            working = [...working, stop];
+            setMessages(working);
+            break;
+          }
 
           for (const call of resp.toolCalls) {
             const tool = tools.find((t) => t.name === call.name);
@@ -115,8 +131,29 @@ export function useChat(tools: MCPTool[]) {
             }
           }
         }
+        // Wenn die KI gar keinen Text produziert hat (alles waren nur
+        // Tool-Aufrufe), legen wir einen kurzen Hinweis ins Chat – sonst
+        // sieht der User nur ein paar JSON-Blöcke und denkt der Agent ist
+        // hängengeblieben.
+        if (!producedAnyText) {
+          const empty: ChatMessage = {
+            id: uid(),
+            role: "model",
+            content:
+              "_(KI hat keine Zusammenfassung geliefert. Tools sind durchgelaufen – siehe Tool-Blöcke oben. Frag nach einer Zusammenfassung, wenn du eine Erklärung in Worten willst.)_",
+          };
+          working = [...working, empty];
+          setMessages(working);
+        }
       } catch (e) {
-        setError((e as Error).message);
+        const msg = (e as Error).message;
+        setError(msg);
+        const errMsg: ChatMessage = {
+          id: uid(),
+          role: "model",
+          content: `⚠️ Fehler: ${msg}`,
+        };
+        setMessages((m) => [...m, errMsg]);
       } finally {
         setBusy(false);
       }

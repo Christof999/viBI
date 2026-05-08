@@ -122,12 +122,19 @@ export function readLiveModel(): LiveModelResult {
   return { source: "none", tables: [], relationships: [] };
 }
 
-// Erkennt den viBI-Platzhalter, der beim Erstellen eines PBIP geschrieben wird.
-// Ein Bericht, dessen TMDL nur „Sales" mit Date/Region/<KPI> enthält, war
-// offensichtlich nie in PBI Desktop gespeichert nachdem echte Daten geladen wurden.
-export function looksLikeViBIPlaceholder(tables: { name: string; columns: { name: string }[] }[]): boolean {
+// Erkennt den viBI-Initial-Zustand: ein frisches Projekt enthält nur eine
+// kalkulierte Date-Tabelle (von viBI beim Anlegen geschrieben) und sonst nichts.
+// Kein eigentlicher „Bug" – nur ein Hinweis, dass der User in PBI Desktop noch
+// keine Faktentabellen importiert hat.
+//
+// Auch das alte „Sales/Date/Region"-Stub-Schema wird weiter erkannt, falls
+// jemand ein altes viBI-Projekt aus dem Vorkommit liegen hat.
+export function looksLikeViBIPlaceholder(
+  tables: { name: string; columns: { name: string }[] }[]
+): boolean {
   if (tables.length !== 1) return false;
   const t = tables[0];
+  if (t.name === "Date") return true; // neuer Initial-Zustand
   if (t.name !== "Sales") return false;
   if (t.columns.length === 0 || t.columns.length > 5) return false;
   const colNames = t.columns.map((c) => c.name.toLowerCase());

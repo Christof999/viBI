@@ -279,7 +279,7 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "add_relationship",
     description:
-      "Erstellt eine Beziehung zwischen zwei Tabellen im PBIP-Modell. Standardmäßig single-direction many-to-one (active=true). Schreibt direkt in model.tmdl.",
+      "Erstellt eine Beziehung zwischen zwei Tabellen im PBIP-Modell. Standardmäßig single-direction many-to-one (active=true). Idempotent: prüft VOR dem Schreiben, ob die Beziehung schon existiert (in beide Richtungen). Falls ja, wird KEINE neue angelegt – der Tool-Output enthält dann alreadyExisted=true samt vorhandener relationshipId.",
     inputSchema: {
       type: "object",
       required: ["fromTable", "fromColumn", "toTable", "toColumn"],
