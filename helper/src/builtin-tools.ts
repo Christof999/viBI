@@ -12,6 +12,7 @@ import {
   addDateTable,
   addMeasure,
   addRelationship,
+  fixAmbiguousRelationships,
   listModel,
   removeRelationship,
 } from "./tmdl.js";
@@ -320,12 +321,51 @@ export const builtInTools: BuiltInTool[] = [
         isActive: typeof args.isActive === "boolean" ? args.isActive : undefined,
       });
       const arrow = `'${fromTable}'.'${fromColumn}' → '${toTable}'.'${toColumn}'`;
+      let summary: string;
+      if (r.alreadyExisted) {
+        summary = `↩︎ Beziehung ${arrow} existierte bereits – nicht doppelt angelegt`;
+      } else if (r.forcedInactive) {
+        summary =
+          `⚠ Beziehung ${arrow} angelegt – aber als INACTIVE, weil zwischen den Tabellen ` +
+          `bereits eine aktive Beziehung existiert (${r.forcedInactiveBecauseOf}). ` +
+          `Power BI erlaubt nur EINE aktive Beziehung pro Tabellenpaar (sonst PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH). ` +
+          `Falls du DIESE als aktive willst, muss die alte zuerst deaktiviert/gelöscht werden.`;
+      } else {
+        summary = `✓ Beziehung ${arrow} angelegt`;
+      }
       return {
         ...r,
-        summary: r.alreadyExisted
-          ? `↩︎ Beziehung ${arrow} existierte bereits – nicht doppelt angelegt`
-          : `✓ Beziehung ${arrow} angelegt`,
+        summary,
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
+    },
+  },
+  {
+    name: "fix_ambiguous_relationships",
+    description:
+      "Repariert ein Modell mit mehrdeutigen Beziehungs-Pfaden (Power BI Fehler PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH). Entfernt exakte Duplikate (gleiches Spaltenpaar) und setzt jede zweite/weitere aktive Beziehung zwischen demselben Tabellenpaar auf inactive. Aufrufen, wenn PBI Desktop diesen Fehler beim Öffnen wirft.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pbipPath: { type: "string" },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+      const r = fixAmbiguousRelationships(path);
+      const total = r.deactivatedCount + r.removedCount;
+      return {
+        ...r,
+        summary:
+          total === 0
+            ? "Keine Probleme gefunden – Beziehungen sind eindeutig."
+            : `Repariert: ${r.removedCount} Duplikat(e) entfernt, ${r.deactivatedCount} aktive Beziehung(en) auf inactive gesetzt.`,
+        reloadHint:
+          total > 0
+            ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen – die mehrdeutigen Pfade sollten weg sein."
+            : undefined,
       };
     },
   },
@@ -575,6 +615,17 @@ export const builtInTools: BuiltInTool[] = [
       }
       const duplicates = [...seen.entries()].filter(([, n]) => n > 1).length;
 
+      // Mehrdeutige Pfade: pro Tabellenpaar > 1 active relationship
+      const activePerTablePair = new Map<string, number>();
+      for (const r of model.relationships) {
+        if (!r.isActive) continue;
+        const k = [r.fromTable, r.toTable].sort().join("=");
+        activePerTablePair.set(k, (activePerTablePair.get(k) ?? 0) + 1);
+      }
+      const ambiguousPaths = [...activePerTablePair.entries()]
+        .filter(([, n]) => n > 1)
+        .map(([k, n]) => ({ tablePair: k.replace("=", " ↔ "), activeCount: n }));
+
       // Datumstabelle gültig? (Date-Spalte vom Typ dateTime mit isKey, plus
       // mind. 3 weitere Spalten Year/Month/o.ä.)
       const dateTable = model.tables.find((t) => t.name === "Date");
@@ -587,7 +638,12 @@ export const builtInTools: BuiltInTool[] = [
       const allRelsOk = relChecks.every((c) => c.ok);
       const allMeasuresOk = measureChecks.every((c) => c.ok);
 
-      const overall = allTablesOk && allRelsOk && allMeasuresOk && duplicates === 0;
+      const overall =
+        allTablesOk &&
+        allRelsOk &&
+        allMeasuresOk &&
+        duplicates === 0 &&
+        ambiguousPaths.length === 0;
 
       const summaryLines: string[] = [];
       if (tableChecks.length) {
@@ -604,6 +660,11 @@ export const builtInTools: BuiltInTool[] = [
       }
       if (dateTable) summaryLines.push(`Datumstabelle: ${dateOk ? "ok" : "unvollständig"}`);
       if (duplicates > 0) summaryLines.push(`⚠️ ${duplicates} doppelte Beziehung(en)`);
+      if (ambiguousPaths.length > 0) {
+        summaryLines.push(
+          `🚨 ${ambiguousPaths.length} mehrdeutige Pfad(e) – ruf fix_ambiguous_relationships auf`
+        );
+      }
 
       return {
         ok: overall,
@@ -613,9 +674,12 @@ export const builtInTools: BuiltInTool[] = [
         measureChecks,
         dateTableOk: dateOk,
         duplicateRelationships: duplicates,
+        ambiguousPaths,
         actualTables: model.tables.map((t) => t.name),
         actualRelationships: model.relationships.map(
-          (r) => `${r.fromTable}.${r.fromColumn}→${r.toTable}.${r.toColumn}`
+          (r) =>
+            `${r.fromTable}.${r.fromColumn}→${r.toTable}.${r.toColumn}` +
+            (r.isActive ? "" : " (inactive)")
         ),
         actualMeasures: model.tables.flatMap((t) =>
           t.measures.map((m) => `${t.name}.${m.name}`)

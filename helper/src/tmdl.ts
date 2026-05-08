@@ -99,6 +99,7 @@ export interface ListedRelationship {
   fromColumn: string;
   toTable: string;
   toColumn: string;
+  isActive: boolean;
 }
 
 export function listModel(pbipPath: string): {
@@ -155,12 +156,14 @@ export function listModel(pbipPath: string): {
       fromColumn?: string;
       toTable?: string;
       toColumn?: string;
+      isActive?: boolean;
     }>).map((r) => ({
       id: r.name ?? "",
       fromTable: r.fromTable ?? "",
       fromColumn: r.fromColumn ?? "",
       toTable: r.toTable ?? "",
       toColumn: r.toColumn ?? "",
+      isActive: r.isActive !== false,
     }));
     return { pbipPath, layout: d.layout, tables, relationships };
   }
@@ -224,7 +227,7 @@ export function listModel(pbipPath: string): {
         toTable = body.match(/toTable:\s*(\S+)/)?.[1] ?? "";
       }
     }
-    relationships.push({ id, fromTable, fromColumn, toTable, toColumn });
+    relationships.push({ id, fromTable, fromColumn, toTable, toColumn, isActive: !/isActive:\s*false/.test(body) });
   }
 
   return { pbipPath, layout: d.layout, tables, relationships };
@@ -299,7 +302,14 @@ export function addRelationship(
     crossFilteringBehavior?: "automatic" | "bothDirections" | "oneDirection";
     isActive?: boolean;
   }
-): { ok: true; path: string; relationshipId: string; alreadyExisted?: boolean } {
+): {
+  ok: true;
+  path: string;
+  relationshipId: string;
+  alreadyExisted?: boolean;
+  forcedInactive?: boolean;
+  forcedInactiveBecauseOf?: string;
+} {
   const ensure = (n: string) => {
     if (!findTableFile(pbipPath, n)) {
       throw new Error(`Tabelle '${n}' nicht im Modell gefunden`);
@@ -308,31 +318,48 @@ export function addRelationship(
   ensure(args.fromTable);
   ensure(args.toTable);
 
-  // Duplikat-Schutz: prüfe alle bestehenden Beziehungen, bevor eine neue
-  // angelegt wird. Beziehungen sind ungerichtet im Sinne der Eindeutigkeit –
-  // (Sales.CustomerID -> Customer.ID) und (Customer.ID -> Sales.CustomerID)
-  // gelten als gleich.
+  // Beziehungs-Logik:
+  //  1) exaktes Spaltenpaar schon da → skip
+  //  2) GLEICHES Tabellenpaar mit anderen Spalten + dort schon eine
+  //     active=true → die neue MUSS isActive: false sein (Power BI
+  //     erlaubt nur EINE active relationship pro Tabellenpaar, sonst
+  //     PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH).
+  let forcedInactive = false;
+  let inactivatedBecauseOf: string | null = null;
   try {
     const existing = listModel(pbipPath).relationships;
-    const same = (
-      r: { fromTable: string; fromColumn: string; toTable: string; toColumn: string }
-    ) =>
-      (r.fromTable === args.fromTable &&
-        r.fromColumn === args.fromColumn &&
-        r.toTable === args.toTable &&
-        r.toColumn === args.toColumn) ||
-      (r.fromTable === args.toTable &&
-        r.fromColumn === args.toColumn &&
-        r.toTable === args.fromTable &&
-        r.toColumn === args.fromColumn);
-    const dup = existing.find(same);
-    if (dup) {
+    const samePair = existing.find(
+      (r) =>
+        (r.fromTable === args.fromTable &&
+          r.fromColumn === args.fromColumn &&
+          r.toTable === args.toTable &&
+          r.toColumn === args.toColumn) ||
+        (r.fromTable === args.toTable &&
+          r.fromColumn === args.toColumn &&
+          r.toTable === args.fromTable &&
+          r.toColumn === args.fromColumn)
+    );
+    if (samePair) {
       return {
         ok: true,
         path: relationshipsFilePath(pbipPath),
-        relationshipId: dup.id,
+        relationshipId: samePair.id,
         alreadyExisted: true,
       };
+    }
+    const sameTablePair = existing.filter(
+      (r) =>
+        (r.fromTable === args.fromTable && r.toTable === args.toTable) ||
+        (r.fromTable === args.toTable && r.toTable === args.fromTable)
+    );
+    const activeBetween = sameTablePair.find((r) => r.isActive);
+    const wantsActive = args.isActive !== false;
+    if (activeBetween && wantsActive) {
+      forcedInactive = true;
+      inactivatedBecauseOf =
+        `'${activeBetween.fromTable}'.'${activeBetween.fromColumn}' → ` +
+        `'${activeBetween.toTable}'.'${activeBetween.toColumn}'`;
+      args = { ...args, isActive: false };
     }
   } catch {
     /* listModel-Fehler tolerieren – dann wird halt geschrieben */
@@ -356,7 +383,105 @@ export function addRelationship(
   const targetFile = relationshipsFilePath(pbipPath);
   const existingContent = existsSync(targetFile) ? readFileSync(targetFile, "utf8") : "";
   const newContent = existingContent.replace(/\s*$/, "\n") + block + "\n";
-  return { ok: true, path: backupAndWrite(targetFile, newContent), relationshipId: id };
+  return {
+    ok: true,
+    path: backupAndWrite(targetFile, newContent),
+    relationshipId: id,
+    ...(forcedInactive
+      ? { forcedInactive: true, forcedInactiveBecauseOf: inactivatedBecauseOf ?? undefined }
+      : {}),
+  };
+}
+
+// Geht alle Beziehungen durch und stellt sicher, dass pro Tabellenpaar
+// maximal EINE active Beziehung existiert. Mehrfach-active werden auf
+// inactive gesetzt; exakte Duplikate (gleiches Spaltenpaar) gelöscht.
+export function fixAmbiguousRelationships(pbipPath: string): {
+  ok: boolean;
+  path: string;
+  deactivatedCount: number;
+  removedCount: number;
+  log: string[];
+} {
+  const d = discoverModel(pbipPath);
+  if (d.layout === "none" || d.layout === "bim") {
+    return { ok: false, path: d.definitionDir, deactivatedCount: 0, removedCount: 0, log: [] };
+  }
+  const model = listModel(pbipPath);
+  const log: string[] = [];
+  let deactivated = 0;
+  let removed = 0;
+
+  // Schritt 1: exakte Duplikate finden (gleiche Spaltenpaare)
+  const seenPair = new Map<string, ListedRelationship>();
+  const exactDups: ListedRelationship[] = [];
+  for (const r of model.relationships) {
+    const key = [
+      [r.fromTable, r.fromColumn].join("|"),
+      [r.toTable, r.toColumn].join("|"),
+    ]
+      .sort()
+      .join("=");
+    const prev = seenPair.get(key);
+    if (prev) exactDups.push(r);
+    else seenPair.set(key, r);
+  }
+  // Schritt 2: pro Tabellenpaar zweite-und-weitere active → inactive
+  const activePerPair = new Map<string, ListedRelationship>();
+  const toDeactivate: ListedRelationship[] = [];
+  for (const r of model.relationships) {
+    if (exactDups.includes(r)) continue;
+    if (!r.isActive) continue;
+    const tablesKey = [r.fromTable, r.toTable].sort().join("=");
+    if (activePerPair.has(tablesKey)) {
+      toDeactivate.push(r);
+    } else {
+      activePerPair.set(tablesKey, r);
+    }
+  }
+
+  // Schritt 3: alle betroffenen TMDL-Dateien anpassen
+  for (const f of d.files) {
+    let content = f.content;
+    let changed = false;
+    for (const dup of exactDups) {
+      const re = new RegExp(
+        `(?:^|\\n)relationship\\s+${escapeRegex(dup.id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
+        "g"
+      );
+      if (re.test(content)) {
+        content = content.replace(re, "");
+        log.push(`✗ Doppelte Beziehung ${dup.id} (${dup.fromTable}.${dup.fromColumn} → ${dup.toTable}.${dup.toColumn}) entfernt`);
+        removed++;
+        changed = true;
+      }
+    }
+    for (const inact of toDeactivate) {
+      // Block des Relationships finden, isActive: false hinzufügen falls noch nicht da
+      const re = new RegExp(
+        `((?:^|\\n)relationship\\s+${escapeRegex(inact.id)}[\\s\\S]*?)(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
+        "g"
+      );
+      content = content.replace(re, (block) => {
+        if (/isActive:\s*false/.test(block)) return block;
+        log.push(
+          `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (zweite Beziehung zwischen ${inact.fromTable} und ${inact.toTable})`
+        );
+        deactivated++;
+        changed = true;
+        return block.replace(/\s*$/, "") + `\n\tisActive: false\n`;
+      });
+    }
+    if (changed) backupAndWrite(f.path, content);
+  }
+
+  return {
+    ok: true,
+    path: d.definitionDir,
+    deactivatedCount: deactivated,
+    removedCount: removed,
+    log,
+  };
 }
 
 export function addCalculatedColumn(
