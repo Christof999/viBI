@@ -80,7 +80,9 @@ export default function App() {
       `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen.\n` +
       `- add_relationship({pbipPath, fromTable, fromColumn, toTable, toColumn, crossFilteringBehavior?, isActive?}): Beziehung anlegen (from = Many-Seite/Faktentabelle, to = One-Seite/Dimension).\n` +
       `- remove_relationship({pbipPath, id}): Beziehung löschen.\n` +
-      `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle anlegen.\n` +
+      `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle (Date + Year/Quarter/Month/MonthName/YearMonth) anlegen.\n` +
+      `- add_calculated_table({pbipPath, name, expression, dataCategory?}): eine beliebige neue kalkulierte Tabelle anlegen (z.B. CALENDAR(...), SUMMARIZE(...), DISTINCT(...)). Ausdruck single-line.\n` +
+      `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): einer Tabelle eine berechnete Spalte hinzufügen (single-line DAX).\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
       `- apply_full_page_html({pbipPath, html}): page-fillendes HTML-Visual in report.json schreiben.\n` +
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +

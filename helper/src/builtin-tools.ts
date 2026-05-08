@@ -7,6 +7,8 @@ import { applyFullPageHTML, readMetadata } from "./pbip.js";
 import { loadLibrary, locateProject } from "./library.js";
 import { mcpRegistry } from "./mcp.js";
 import {
+  addCalculatedColumn,
+  addCalculatedTable,
   addDateTable,
   addMeasure,
   addRelationship,
@@ -335,6 +337,108 @@ export const builtInTools: BuiltInTool[] = [
       const id = str(args.id);
       if (!path || !id) throw new Error("pbipPath und id erforderlich");
       return removeRelationship(path, id);
+    },
+  },
+  {
+    name: "add_calculated_table",
+    description:
+      "Legt eine neue kalkulierte Tabelle (calculated table) im PBIP-Modell an. Der DAX-Ausdruck (Single-Line) liefert die Tabelle. Beispiele: CALENDAR(...), SUMMARIZE(Sales, Customer[Region]), DISTINCT(Sales[Item]).",
+    inputSchema: {
+      type: "object",
+      required: ["name", "expression"],
+      properties: {
+        pbipPath: { type: "string" },
+        name: { type: "string", description: "Name der neuen Tabelle." },
+        expression: {
+          type: "string",
+          description:
+            "DAX-Tabellen-Ausdruck (single-line). Z.B. CALENDAR(DATE(2020,1,1), DATE(2030,12,31)).",
+        },
+        dataCategory: {
+          type: "string",
+          enum: ["Time", "Regular"],
+          description: 'Setze "Time" für Datums-/Zeit-Dimensionen.',
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      const name = str(args.name);
+      const expression = str(args.expression);
+      if (!path || !name || !expression) {
+        throw new Error("pbipPath, name und expression erforderlich");
+      }
+      const r = addCalculatedTable(path, {
+        name,
+        expression,
+        dataCategory: args.dataCategory as "Time" | "Regular" | undefined,
+      });
+      return {
+        ...r,
+        reloadHint:
+          "PBI Desktop schließen ohne Speichern, dann erneut öffnen. Anschließend können calc columns via add_calculated_column und Beziehungen via add_relationship gesetzt werden.",
+      };
+    },
+  },
+  {
+    name: "add_calculated_column",
+    description:
+      "Fügt einer existierenden Tabelle eine calculated column (DAX) hinzu. Single-Line-Ausdruck.",
+    inputSchema: {
+      type: "object",
+      required: ["table", "name", "expression"],
+      properties: {
+        pbipPath: { type: "string" },
+        table: { type: "string" },
+        name: { type: "string" },
+        expression: {
+          type: "string",
+          description: "DAX-Spalten-Ausdruck, z.B. YEAR([Date]) oder \"Q\" & FORMAT([Date], \"Q\").",
+        },
+        dataType: {
+          type: "string",
+          enum: ["int64", "double", "string", "boolean", "dateTime"],
+        },
+        formatString: { type: "string" },
+        summarizeBy: {
+          type: "string",
+          enum: ["none", "sum", "average", "count", "max", "min"],
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      const table = str(args.table);
+      const name = str(args.name);
+      const expression = str(args.expression);
+      if (!path || !table || !name || !expression) {
+        throw new Error("pbipPath, table, name und expression erforderlich");
+      }
+      const r = addCalculatedColumn(path, {
+        table,
+        name,
+        expression,
+        dataType: args.dataType as
+          | "int64"
+          | "double"
+          | "string"
+          | "boolean"
+          | "dateTime"
+          | undefined,
+        formatString: str(args.formatString),
+        summarizeBy: args.summarizeBy as
+          | "none"
+          | "sum"
+          | "average"
+          | "count"
+          | "max"
+          | "min"
+          | undefined,
+      });
+      return {
+        ...r,
+        reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
     },
   },
   {

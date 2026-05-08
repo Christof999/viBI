@@ -328,6 +328,87 @@ export function addRelationship(
   return { ok: true, path: backupAndWrite(targetFile, newContent), relationshipId: id };
 }
 
+export function addCalculatedColumn(
+  pbipPath: string,
+  args: {
+    table: string;
+    name: string;
+    expression: string;
+    dataType?: "int64" | "double" | "string" | "boolean" | "dateTime";
+    formatString?: string;
+    summarizeBy?: "none" | "sum" | "average" | "count" | "max" | "min";
+  }
+): { ok: true; path: string } {
+  const file = findTableFile(pbipPath, args.table);
+  if (!file) throw new Error(`Tabelle '${args.table}' nicht im Modell gefunden`);
+  const block = findBlock(
+    file.content,
+    new RegExp(`^table\\s+(?:'${escapeRegex(args.table)}'|${escapeRegex(args.table)})\\b`)
+  );
+  if (!block) throw new Error(`Tabellen-Block in ${file.filePath} nicht parsbar`);
+  const lines = file.content.split(/\r?\n/);
+  const insertAt = block.end;
+  const expr = args.expression.trim();
+  if (expr.includes("\n")) {
+    throw new Error(
+      "Calculated-Column-Ausdrücke müssen einzeilig sein. Verwende für komplexere Logik eine Measure-Definition oder fasse den Ausdruck zusammen."
+    );
+  }
+  const colName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name) ? args.name : `'${args.name.replace(/'/g, "''")}'`;
+  const props: string[] = [];
+  if (args.dataType) props.push(`\t\tdataType: ${args.dataType}`);
+  props.push(`\t\tsummarizeBy: ${args.summarizeBy ?? "none"}`);
+  if (args.formatString) props.push(`\t\tformatString: ${tmdlString(args.formatString)}`);
+  const insert = ["", `\tcolumn ${colName} = ${expr}`, ...props, ""];
+  lines.splice(insertAt, 0, ...insert);
+  return { ok: true, path: backupAndWrite(file.filePath, joinBlock(lines)) };
+}
+
+export function addCalculatedTable(
+  pbipPath: string,
+  args: {
+    name: string;
+    expression: string;
+    dataCategory?: "Time" | "Regular";
+  }
+): { ok: true; path: string; tableName: string } {
+  if (findTableFile(pbipPath, args.name)) {
+    throw new Error(`Tabelle '${args.name}' existiert bereits.`);
+  }
+  const expr = args.expression.trim();
+  if (expr.includes("\n")) {
+    throw new Error(
+      "Calculated-Table-Ausdrücke müssen einzeilig sein (z.B. 'CALENDAR(DATE(2020,1,1), DATE(2030,12,31))' oder 'SUMMARIZE(...)'). Verwende für mehrzeilige Logik mehrere Schritte oder eine Measure."
+    );
+  }
+  const d = discoverModel(pbipPath);
+  const dataCat = args.dataCategory ? `\n\tdataCategory: ${args.dataCategory}\n` : "\n";
+  const block = `
+table '${args.name}'${dataCat}
+\tpartition '${args.name}' = calculated
+\t\tmode: import
+\t\tsource = ${expr}
+`;
+  if (d.layout === "sharded") {
+    const tablesDir = join(d.definitionDir, "tables");
+    const target = existsSync(tablesDir)
+      ? join(tablesDir, `${args.name}.tmdl`)
+      : join(d.definitionDir, `${args.name}.tmdl`);
+    return {
+      ok: true,
+      path: backupAndWrite(target, block.trimStart() + "\n"),
+      tableName: args.name,
+    };
+  }
+  const target = modelTmdlPath(pbipPath);
+  const src = existsSync(target) ? readFileSync(target, "utf8") : "";
+  return {
+    ok: true,
+    path: backupAndWrite(target, src.replace(/\s*$/, "\n") + block + "\n"),
+    tableName: args.name,
+  };
+}
+
 export function addDateTable(
   pbipPath: string,
   args?: { name?: string; startDate?: string; endDate?: string }
@@ -343,51 +424,47 @@ export function addDateTable(
   }
 
   const d = discoverModel(pbipPath);
-  // Calculated-Table: Spalten kommen automatisch aus ADDCOLUMNS (kein
-  // sourceColumn nötig). Multi-Zeilen-DAX MUSS in einem Triple-Backtick-Fence
-  // stehen, sonst frisst der TMDL-Parser anschließende Properties als DAX.
+  // Kanonische PBI-Form: Single-Line-Partition mit CALENDAR(...) (liefert die
+  // Date-Spalte) plus jede weitere Spalte als calculated column. Damit
+  // brauchen wir keinen Triple-Backtick-Fence und keine ADDCOLUMNS-Konstrukte
+  // im Partition-Body, die TMDL bei jeder Indentations-Ungenauigkeit als
+  // "InvalidLineType" abweist.
   const block = `
 table '${name}'
 \tdataCategory: Time
 
-\tcolumn 'Date'
+\tcolumn Date
 \t\tdataType: dateTime
 \t\tisKey
 \t\tsummarizeBy: none
+\t\tsourceColumn: [Date]
 \t\tformatString: "General Date"
 
-\tcolumn 'Year'
+\tcolumn Year = YEAR([Date])
 \t\tdataType: int64
 \t\tsummarizeBy: none
+\t\tformatString: "0"
 
-\tcolumn 'Quarter'
+\tcolumn Quarter = "Q" & FORMAT([Date], "Q")
 \t\tdataType: string
 \t\tsummarizeBy: none
 
-\tcolumn 'Month'
+\tcolumn Month = MONTH([Date])
 \t\tdataType: int64
 \t\tsummarizeBy: none
+\t\tformatString: "0"
 
-\tcolumn 'MonthName'
+\tcolumn MonthName = FORMAT([Date], "MMMM")
 \t\tdataType: string
 \t\tsummarizeBy: none
 
-\tcolumn 'YearMonth'
+\tcolumn YearMonth = FORMAT([Date], "yyyy-MM")
 \t\tdataType: string
 \t\tsummarizeBy: none
 
 \tpartition '${name}' = calculated
 \t\tmode: import
-\t\tsource = \`\`\`
-ADDCOLUMNS(
-\tCALENDAR(${start}, ${end}),
-\t"Year", YEAR([Date]),
-\t"Quarter", "Q" & FORMAT([Date], "Q"),
-\t"Month", MONTH([Date]),
-\t"MonthName", FORMAT([Date], "MMMM"),
-\t"YearMonth", FORMAT([Date], "YYYY-MM")
-)
-\`\`\`
+\t\tsource = CALENDAR(${start}, ${end})
 `;
 
   if (d.layout === "sharded") {
