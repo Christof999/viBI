@@ -1,4 +1,6 @@
 import { motion } from "framer-motion";
+import { useState } from "react";
+import { helper } from "../lib/helperClient";
 import type { ProjectConfig, TableSuggestion } from "../types";
 
 interface Props {
@@ -18,6 +20,22 @@ export function ModelingPanel({
   onBackToProposal,
   busy,
 }: Props) {
+  const [opening, setOpening] = useState(false);
+  const [openMsg, setOpenMsg] = useState<string | null>(null);
+
+  const openInPBI = async () => {
+    if (!pbipPath) return;
+    setOpening(true);
+    setOpenMsg(null);
+    try {
+      await helper.openPowerBIDesktop(pbipPath);
+      setOpenMsg("Power BI Desktop wurde mit deinem .pbip geöffnet. Lade dort deine Tabellen und drücke Strg+S.");
+    } catch (e) {
+      setOpenMsg(`Konnte PBI Desktop nicht öffnen: ${(e as Error).message}`);
+    } finally {
+      setOpening(false);
+    }
+  };
   return (
     <main
       style={{
@@ -107,25 +125,54 @@ export function ModelingPanel({
 
         <section
           style={{
-            background: "var(--panel)",
-            border: "1px solid var(--border)",
+            background: "linear-gradient(180deg, rgba(242,200,17,0.10), rgba(242,200,17,0.02))",
+            border: "1px solid var(--accent)",
             borderRadius: 12,
             padding: 20,
           }}
         >
-          <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>So gehst du jetzt vor</h3>
+          <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>
+            ⚠️ Wichtig: Deine Tabellen müssen in <em>diesem</em> .pbip landen
+          </h3>
           <ol style={{ paddingLeft: 18, lineHeight: 1.9, fontSize: 14, color: "var(--text)" }}>
-            <li>Power BI Desktop sollte geöffnet sein</li>
             <li>
-              Falls Fabric-MCP-Modellierung nicht automatisch gegriffen hat, nutze den Chat
-              rechts für DAX, Power-Query und Beziehungen
+              Klick unten <strong>„In PBI Desktop öffnen"</strong> – das öffnet genau die
+              .pbip-Datei oben (kein neues, leeres Fenster verwenden!)
             </li>
-            <li>Speichere den Bericht in PBI Desktop</li>
             <li>
-              Klick „Modell fertig" – viBI liest die Metadaten ein, schließt PBI und führt
-              dich ins Design (ein einziges, ganzseitiges HTML-Visual)
+              In Power BI Desktop: <strong>Daten abrufen → Business Central / OData</strong>{" "}
+              und die vorgeschlagenen Tabellen importieren
+            </li>
+            <li>
+              <strong>Strg+S drücken</strong> – das ist der entscheidende Schritt. Erst beim
+              Speichern schreibt PBI die Tabellen in die TMDL, sonst sieht viBI nur den
+              Platzhalter.
+            </li>
+            <li>
+              Im Chat rechts: „Welche Tabellen sind aktuell geladen?" – viBI liest live aus dem
+              PBI-Workspace und kann dann Beziehungen, Measures und eine Datumstabelle direkt
+              anlegen.
+            </li>
+            <li>
+              Klick „Modell fertig" sobald du zufrieden bist – führt dich ins Design.
             </li>
           </ol>
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={openInPBI} disabled={!pbipPath || opening} className="primary">
+              {opening ? "Öffne…" : "📂 In PBI Desktop öffnen"}
+            </button>
+          </div>
+          {openMsg && (
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 12,
+                color: openMsg.startsWith("Konnte") ? "var(--danger)" : "var(--ok)",
+              }}
+            >
+              {openMsg}
+            </div>
+          )}
         </section>
 
         <section style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

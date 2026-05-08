@@ -85,7 +85,9 @@ export default function App() {
       `- apply_full_page_html({pbipPath, html}): page-fillendes HTML-Visual in report.json schreiben.\n` +
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
       `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
-      `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).`;
+      `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).\n\n` +
+      `DATENQUELLEN-LOGIK: Tools liefern in 'source' entweder 'live-workspace' (PBI Desktop hat den Bericht aktuell offen, das Modell ist live) oder 'tmdl' (gelesen aus der gespeicherten Datei). ` +
+      `Wenn ein Tool 'placeholderWarning' zurückgibt: das Modell ist NUR der viBI-Stub. Du sagst dem User in EINEM Satz, dass er den .pbip in PBI Desktop öffnen, Tabellen laden UND mit Strg+S speichern muss – dann rufst du die Tools NICHT erneut auf, bis er bestätigt. Erfinde NIE Tabellen, die nicht in 'tables' stehen.`;
     chat.setExtraSystemPrompt(ctx);
     chat.setToolArgDefaults({
       pbipPath: state.pbipPath,

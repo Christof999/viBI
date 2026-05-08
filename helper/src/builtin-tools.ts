@@ -13,6 +13,7 @@ import {
   listModel,
   removeRelationship,
 } from "./tmdl.js";
+import { looksLikeViBIPlaceholder, readLiveModel } from "./live-model.js";
 
 export interface BuiltInTool {
   name: string;
@@ -58,7 +59,40 @@ export const builtInTools: BuiltInTool[] = [
         path = fallback.pbipPath;
       }
       if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
-      return { pbipPath: path, ...readMetadata(path) };
+
+      // Bevorzugt: Live-Workspace von Power BI Desktop. Das ist die einzige
+      // verlässliche Quelle, wenn der User Tabellen geladen aber NICHT
+      // gespeichert hat. Erst wenn das fehlschlägt, fällt auf die TMDL zurück.
+      const live = readLiveModel();
+      if (live.source === "live-workspace" && live.tables.length > 0) {
+        return {
+          pbipPath: path,
+          source: "live-workspace",
+          workspacePath: live.workspacePath,
+          tables: live.tables.map((t) => ({
+            name: t.name,
+            columns: t.columns,
+            measureCount: t.measures.length,
+          })),
+          relationshipCount: live.relationships.length,
+        };
+      }
+
+      const meta = readMetadata(path);
+      const placeholder = looksLikeViBIPlaceholder(meta.tables);
+      return {
+        pbipPath: path,
+        source: "tmdl",
+        ...meta,
+        ...(placeholder
+          ? {
+              placeholderWarning:
+                "ACHTUNG: Diese TMDL enthält nur den viBI-Platzhalter (Tabelle 'Sales' mit Date/Region). Das bedeutet: der User hat in Power BI Desktop entweder den .pbip noch nicht geöffnet ODER hat zwar Daten importiert, aber NICHT gespeichert. Die echten Tabellen sind viBI nicht zugänglich. Sage dem User WÖRTLICH: 'Bitte öffne in Power BI Desktop die Datei " +
+                path +
+                ", lade dort deine Tabellen UND drücke danach Strg+S. Erst dann kann ich auf das echte Modell zugreifen.' Erfinde KEINE Tabellen.",
+            }
+          : {}),
+      };
     },
   },
   {
@@ -124,7 +158,30 @@ export const builtInTools: BuiltInTool[] = [
       const path = str(args.pbipPath);
       if (!path) throw new Error("pbipPath erforderlich");
       if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
-      return listModel(path);
+      const live = readLiveModel();
+      if (live.source === "live-workspace" && live.tables.length > 0) {
+        return {
+          pbipPath: path,
+          source: "live-workspace",
+          workspacePath: live.workspacePath,
+          tables: live.tables,
+          relationships: live.relationships,
+          note:
+            "Quelle: PBI Desktop Live-Workspace (Model.bim). Schreib-Tools (add_measure, add_relationship, add_date_table) wirken jedoch auf die TMDL des PBIP – diese Änderungen werden in PBI Desktop erst nach Datei→Schließen ohne Speichern + erneut Öffnen sichtbar.",
+        };
+      }
+      const tmdl = listModel(path);
+      const placeholder = looksLikeViBIPlaceholder(tmdl.tables);
+      return {
+        ...tmdl,
+        source: "tmdl",
+        ...(placeholder
+          ? {
+              placeholderWarning:
+                "Diese TMDL enthält nur den viBI-Platzhalter. Stoppe sofort und sage dem User, dass er den .pbip in Power BI Desktop öffnen, Tabellen laden UND speichern (Strg+S) muss. Erfinde KEINE Modellstruktur.",
+            }
+          : {}),
+      };
     },
   },
   {
