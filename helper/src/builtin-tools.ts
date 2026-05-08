@@ -271,8 +271,9 @@ export const builtInTools: BuiltInTool[] = [
       });
       return {
         ...r,
+        summary: `✓ Measure '${name}' in Tabelle '${table}' angelegt`,
         reloadHint:
-          "Power BI Desktop: Datei → Schließen ohne Speichern → erneut öffnen, oder Desktop neu starten, damit die Änderung geladen wird.",
+          "Power BI Desktop: Datei → Schließen ohne Speichern → erneut öffnen, damit die Änderung geladen wird.",
       };
     },
   },
@@ -318,7 +319,14 @@ export const builtInTools: BuiltInTool[] = [
           | undefined,
         isActive: typeof args.isActive === "boolean" ? args.isActive : undefined,
       });
-      return { ...r, reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen." };
+      const arrow = `'${fromTable}'.'${fromColumn}' → '${toTable}'.'${toColumn}'`;
+      return {
+        ...r,
+        summary: r.alreadyExisted
+          ? `↩︎ Beziehung ${arrow} existierte bereits – nicht doppelt angelegt`
+          : `✓ Beziehung ${arrow} angelegt`,
+        reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
     },
   },
   {
@@ -375,6 +383,7 @@ export const builtInTools: BuiltInTool[] = [
       });
       return {
         ...r,
+        summary: `✓ Tabelle '${r.tableName}' angelegt`,
         reloadHint:
           "PBI Desktop schließen ohne Speichern, dann erneut öffnen. Anschließend können calc columns via add_calculated_column und Beziehungen via add_relationship gesetzt werden.",
       };
@@ -437,6 +446,7 @@ export const builtInTools: BuiltInTool[] = [
       });
       return {
         ...r,
+        summary: `✓ Calc Column '${name}' in Tabelle '${table}' angelegt`,
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
       };
     },
@@ -470,8 +480,146 @@ export const builtInTools: BuiltInTool[] = [
       });
       return {
         ...r,
+        summary: `✓ Datumstabelle '${r.tableName}' angelegt (Date, Year, Quarter, Month, MonthName, YearMonth)`,
         reloadHint:
-          "Nach dem Reload in PBI Desktop: Beziehung der Faktentabelle (Datums-Spalte) auf Date.Date anlegen lassen via add_relationship.",
+          "Nach dem Reload in PBI Desktop: Beziehung der Faktentabelle (Datums-Spalte) auf Date.Date anlegen via add_relationship.",
+      };
+    },
+  },
+  {
+    name: "verify_model",
+    description:
+      "Prüft am Ende einer Modellierungs-Session, ob die geplanten Tabellen, Beziehungen und Measures wirklich im Modell stehen, ob die Datumstabelle gültig ist und ob keine doppelten Beziehungen existieren. Liefert eine Liste 'ok'/'missing' pro erwartetem Element. Soll IMMER aufgerufen werden, nachdem add_*-Tools fertig sind.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pbipPath: { type: "string" },
+        expectedTables: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tabellen, die existieren sollen.",
+        },
+        expectedRelationships: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              fromTable: { type: "string" },
+              fromColumn: { type: "string" },
+              toTable: { type: "string" },
+              toColumn: { type: "string" },
+            },
+          },
+        },
+        expectedMeasures: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              table: { type: "string" },
+              name: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+      const model = listModel(path);
+
+      const expectedTables = (args.expectedTables as string[] | undefined) ?? [];
+      const expectedRels =
+        (args.expectedRelationships as
+          | Array<{ fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string }>
+          | undefined) ?? [];
+      const expectedMeasures =
+        (args.expectedMeasures as Array<{ table?: string; name?: string }> | undefined) ?? [];
+
+      const tableNames = new Set(model.tables.map((t) => t.name));
+      const tableChecks = expectedTables.map((t) => ({
+        table: t,
+        ok: tableNames.has(t),
+      }));
+
+      const relPairs = new Set(
+        model.relationships.map(
+          (r) => `${r.fromTable}.${r.fromColumn}->${r.toTable}.${r.toColumn}`
+        )
+      );
+      const relChecks = expectedRels.map((r) => {
+        const fwd = `${r.fromTable}.${r.fromColumn}->${r.toTable}.${r.toColumn}`;
+        const bwd = `${r.toTable}.${r.toColumn}->${r.fromTable}.${r.fromColumn}`;
+        return { ...r, ok: relPairs.has(fwd) || relPairs.has(bwd) };
+      });
+
+      const measureChecks = expectedMeasures.map((em) => {
+        const tbl = model.tables.find((t) => t.name === em.table);
+        return {
+          ...em,
+          ok: !!tbl?.measures.some((m) => m.name === em.name),
+        };
+      });
+
+      // Doppelte Beziehungen finden (gleiche Spaltenpaare > 1x)
+      const seen = new Map<string, number>();
+      for (const r of model.relationships) {
+        const key = [
+          [r.fromTable, r.fromColumn].sort().join("|"),
+          [r.toTable, r.toColumn].sort().join("|"),
+        ]
+          .sort()
+          .join("=");
+        seen.set(key, (seen.get(key) ?? 0) + 1);
+      }
+      const duplicates = [...seen.entries()].filter(([, n]) => n > 1).length;
+
+      // Datumstabelle gültig? (Date-Spalte vom Typ dateTime mit isKey, plus
+      // mind. 3 weitere Spalten Year/Month/o.ä.)
+      const dateTable = model.tables.find((t) => t.name === "Date");
+      const dateOk =
+        !!dateTable &&
+        dateTable.columns.some((c) => c.name === "Date" && c.dataType === "dateTime") &&
+        dateTable.columns.length >= 3;
+
+      const allTablesOk = tableChecks.every((c) => c.ok);
+      const allRelsOk = relChecks.every((c) => c.ok);
+      const allMeasuresOk = measureChecks.every((c) => c.ok);
+
+      const overall = allTablesOk && allRelsOk && allMeasuresOk && duplicates === 0;
+
+      const summaryLines: string[] = [];
+      if (tableChecks.length) {
+        const ok = tableChecks.filter((c) => c.ok).length;
+        summaryLines.push(`Tabellen: ${ok}/${tableChecks.length} ✓`);
+      }
+      if (relChecks.length) {
+        const ok = relChecks.filter((c) => c.ok).length;
+        summaryLines.push(`Beziehungen: ${ok}/${relChecks.length} ✓`);
+      }
+      if (measureChecks.length) {
+        const ok = measureChecks.filter((c) => c.ok).length;
+        summaryLines.push(`Measures: ${ok}/${measureChecks.length} ✓`);
+      }
+      if (dateTable) summaryLines.push(`Datumstabelle: ${dateOk ? "ok" : "unvollständig"}`);
+      if (duplicates > 0) summaryLines.push(`⚠️ ${duplicates} doppelte Beziehung(en)`);
+
+      return {
+        ok: overall,
+        summary: summaryLines.join(" · ") || "Keine Erwartungen geprüft.",
+        tableChecks,
+        relChecks,
+        measureChecks,
+        dateTableOk: dateOk,
+        duplicateRelationships: duplicates,
+        actualTables: model.tables.map((t) => t.name),
+        actualRelationships: model.relationships.map(
+          (r) => `${r.fromTable}.${r.fromColumn}→${r.toTable}.${r.toColumn}`
+        ),
+        actualMeasures: model.tables.flatMap((t) =>
+          t.measures.map((m) => `${t.name}.${m.name}`)
+        ),
       };
     },
   },

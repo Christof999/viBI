@@ -68,28 +68,19 @@ export function Header({ status, toolCount, onRefresh, project, phase, onRestart
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <StatusPill label="Helper" ok={ok} />
         <StatusPill
-          label={`KI-Tools${toolCount !== undefined ? ` · ${toolCount}` : ""}`}
+          label={`KI-Werkzeuge${toolCount !== undefined ? ` · ${toolCount}` : ""}`}
           ok={ok && (toolCount ?? 0) > 0}
           dim={!ok}
+          title={
+            ok
+              ? `${toolCount ?? 0} Tools verfügbar (helper-built-in + ggf. MCP)`
+              : "Helper offline"
+          }
         />
-        <StatusPill
-          label="MS PBI Remote"
-          ok={!!status?.mcp?.remote}
-          dim={!ok}
-          optional
-        />
-        <StatusPill
-          label="Fabric MCP"
-          ok={!!status?.mcp?.fabric}
-          dim={!ok}
-          optional
-        />
-        <StatusPill
-          label="Custom MCP"
-          ok={!!status?.mcp?.custom}
-          dim={!ok}
-          optional
-        />
+        {/* Optionale MCP-Sub-Server: nur sichtbar, wenn aktiviert */}
+        {status?.mcp?.remote && <StatusPill label="MS PBI Remote" ok dim={!ok} />}
+        {status?.mcp?.fabric && <StatusPill label="Fabric MCP" ok dim={!ok} />}
+        {status?.mcp?.custom && <StatusPill label="Custom MCP" ok dim={!ok} />}
         <button onClick={onRefresh}>↻</button>
         {onLibrary && phase !== "library" && (
           <button onClick={onLibrary}>Bibliothek</button>
@@ -126,11 +117,13 @@ function StatusPill({
   ok,
   dim,
   optional,
+  title,
 }: {
   label: string;
   ok: boolean;
   dim?: boolean;
   optional?: boolean;
+  title?: string;
 }) {
   // Optionale Pills (Fabric/Custom MCP) zeigen ihren "nicht verbunden"-Zustand
   // grau statt rot, damit klar wird: nicht erforderlich, nur add-on.
@@ -139,13 +132,14 @@ function StatusPill({
     : optional
     ? "var(--border)"
     : "var(--danger)";
+  const tooltip =
+    title ??
+    (optional && !ok
+      ? "Optional. Nicht erforderlich für den Standard-Workflow."
+      : undefined);
   return (
     <div
-      title={
-        optional && !ok
-          ? "Optional. Nicht erforderlich für den Standard-Workflow."
-          : undefined
-      }
+      title={tooltip}
       style={{
         display: "flex",
         alignItems: "center",

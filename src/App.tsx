@@ -93,10 +93,11 @@ export default function App() {
       `Erfinde NIE Tabellen, die nicht in einem Tool-Resultat 'tables' stehen.\n\n` +
       `MODELLIERUNGS-REIHENFOLGE (verbindlich):\n` +
       `1. Zuerst IMMER list_model aufrufen, um den aktuellen Stand zu sehen (Tabellen, Spalten, Measures, BESTEHENDE BEZIEHUNGEN).\n` +
-      `2. Beziehungen NICHT doppelt anlegen. Wenn list_model schon eine Beziehung zwischen zwei Spalten zeigt, NIE add_relationship dafür aufrufen. Bei add_relationship gibt es zwar einen alreadyExisted-Schutz, aber rufe das Tool gar nicht erst auf, wenn die Beziehung schon da ist – das spart Schritte.\n` +
+      `2. Beziehungen NICHT doppelt anlegen. Wenn list_model schon eine Beziehung zwischen zwei Spalten zeigt, NIE add_relationship dafür aufrufen.\n` +
       `3. add_date_table NUR wenn list_model keine Tabelle namens 'Date' enthält. Frische viBI-Projekte haben bereits eine Datumstabelle.\n` +
       `4. Schritte planen: 1 list_model, dann ggf. 1 add_date_table, dann pro Faktentabelle EINE add_relationship zur Date-Tabelle, dann pro KPI EIN add_measure. Nicht mehr.\n` +
-      `5. AM ENDE IMMER eine kurze deutsche Textantwort schicken: Was wurde angelegt, was war schon da, welche Reload-Hinweise gelten. Kein Kommentar = User denkt du bist hängengeblieben.`;
+      `5. NACH ALLEN SCHREIB-TOOLS: rufe verify_model auf mit den expectedTables/expectedRelationships/expectedMeasures, die du gerade angelegt hast. Das prüft, ob alles wirklich im TMDL gelandet ist und ob keine Doppelten Beziehungen entstanden sind.\n` +
+      `6. AM ENDE IMMER eine kurze deutsche Textantwort schicken, die: (a) jeden 'summary'-Satz aus den Tool-Resultaten zusammenfasst (✓/↩︎/⚠️), (b) das verify_model-Ergebnis erwähnt (X/Y Tabellen ok, etc.), (c) den reloadHint einmal nennt. Format: kurze Bullet-Liste. Kein Kommentar = User denkt du bist hängengeblieben.`;
     chat.setExtraSystemPrompt(ctx);
     chat.setToolArgDefaults({
       pbipPath: state.pbipPath,

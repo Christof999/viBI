@@ -455,11 +455,11 @@ export function addDateTable(
   }
 
   const d = discoverModel(pbipPath);
-  // Kanonische PBI-Form: Single-Line-Partition mit CALENDAR(...) (liefert die
-  // Date-Spalte) plus jede weitere Spalte als calculated column. Damit
-  // brauchen wir keinen Triple-Backtick-Fence und keine ADDCOLUMNS-Konstrukte
-  // im Partition-Body, die TMDL bei jeder Indentations-Ungenauigkeit als
-  // "InvalidLineType" abweist.
+  // Power BI Desktop schreibt Datumstabellen kanonisch so: reguläre Columns
+  // mit sourceColumn: [X], ADDCOLUMNS(...) als Partition-Source als
+  // indented multi-line (KEIN Triple-Backtick-Fence – der ist für M, nicht
+  // für DAX). Indentation der Expression-Zeilen MUSS tiefer sein als die
+  // `source =`-Zeile, sonst beendet der Parser den Block zu früh.
   const block = `
 table '${name}'
 \tdataCategory: Time
@@ -469,33 +469,46 @@ table '${name}'
 \t\tisKey
 \t\tsummarizeBy: none
 \t\tsourceColumn: [Date]
-\t\tformatString: "General Date"
+\t\tformatString: General Date
 
-\tcolumn Year = YEAR([Date])
+\tcolumn Year
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tformatString: "0"
+\t\tsourceColumn: [Year]
+\t\tformatString: 0
 
-\tcolumn Quarter = "Q" & FORMAT([Date], "Q")
+\tcolumn Quarter
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [Quarter]
 
-\tcolumn Month = MONTH([Date])
+\tcolumn Month
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tformatString: "0"
+\t\tsourceColumn: [Month]
+\t\tformatString: 0
 
-\tcolumn MonthName = FORMAT([Date], "MMMM")
+\tcolumn MonthName
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [MonthName]
 
-\tcolumn YearMonth = FORMAT([Date], "yyyy-MM")
+\tcolumn YearMonth
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [YearMonth]
 
 \tpartition '${name}' = calculated
 \t\tmode: import
-\t\tsource = CALENDAR(${start}, ${end})
+\t\tsource =
+\t\t\t\tADDCOLUMNS(
+\t\t\t\t\tCALENDAR(${start}, ${end}),
+\t\t\t\t\t"Year", YEAR([Date]),
+\t\t\t\t\t"Quarter", "Q" & FORMAT([Date], "Q"),
+\t\t\t\t\t"Month", MONTH([Date]),
+\t\t\t\t\t"MonthName", FORMAT([Date], "MMMM"),
+\t\t\t\t\t"YearMonth", FORMAT([Date], "yyyy-MM")
+\t\t\t\t)
 `;
 
   if (d.layout === "sharded") {

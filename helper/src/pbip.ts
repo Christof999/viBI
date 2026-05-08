@@ -85,9 +85,10 @@ in
   );
 }
 
-// Default-TMDL beim Anlegen eines Projekts: nur eine Datumstabelle, KEINE
-// Stub-„Sales"-Tabelle mehr. Die echten Faktentabellen importiert der User
-// in PBI Desktop selbst (Daten abrufen → BC/OData/...).
+// Default-TMDL beim Anlegen eines Projekts: kalkulierte Datumstabelle in
+// kanonischer Power-BI-Form (regular columns mit sourceColumn, ADDCOLUMNS
+// als indented multi-line ohne Fence – das ist genau das Format, das PBI
+// Desktop selbst beim "New table → Date table" erzeugt).
 function defaultDateTableTmdl(): string {
   return `table 'Date'
 \tdataCategory: Time
@@ -97,33 +98,46 @@ function defaultDateTableTmdl(): string {
 \t\tisKey
 \t\tsummarizeBy: none
 \t\tsourceColumn: [Date]
-\t\tformatString: "General Date"
+\t\tformatString: General Date
 
-\tcolumn Year = YEAR([Date])
+\tcolumn Year
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tformatString: "0"
+\t\tsourceColumn: [Year]
+\t\tformatString: 0
 
-\tcolumn Quarter = "Q" & FORMAT([Date], "Q")
+\tcolumn Quarter
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [Quarter]
 
-\tcolumn Month = MONTH([Date])
+\tcolumn Month
 \t\tdataType: int64
 \t\tsummarizeBy: none
-\t\tformatString: "0"
+\t\tsourceColumn: [Month]
+\t\tformatString: 0
 
-\tcolumn MonthName = FORMAT([Date], "MMMM")
+\tcolumn MonthName
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [MonthName]
 
-\tcolumn YearMonth = FORMAT([Date], "yyyy-MM")
+\tcolumn YearMonth
 \t\tdataType: string
 \t\tsummarizeBy: none
+\t\tsourceColumn: [YearMonth]
 
 \tpartition 'Date' = calculated
 \t\tmode: import
-\t\tsource = CALENDAR(DATE(2020,1,1), DATE(2030,12,31))
+\t\tsource =
+\t\t\t\tADDCOLUMNS(
+\t\t\t\t\tCALENDAR(DATE(2020,1,1), DATE(2030,12,31)),
+\t\t\t\t\t"Year", YEAR([Date]),
+\t\t\t\t\t"Quarter", "Q" & FORMAT([Date], "Q"),
+\t\t\t\t\t"Month", MONTH([Date]),
+\t\t\t\t\t"MonthName", FORMAT([Date], "MMMM"),
+\t\t\t\t\t"YearMonth", FORMAT([Date], "yyyy-MM")
+\t\t\t\t)
 `;
 }
 
