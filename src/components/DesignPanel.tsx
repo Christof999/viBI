@@ -62,7 +62,7 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
     return () => clearTimeout(t);
   }, [html, pbipPath]);
 
-  // 3) KI-Änderungen → poll alle 2.5s, falls der Helper neueres HTML hat
+  // 3) KI-Änderungen → poll alle 1.5s, falls der Helper neueres HTML hat
   useEffect(() => {
     if (!pbipPath) return;
     const id = setInterval(async () => {
@@ -77,7 +77,7 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
       } catch {
         /* ignore */
       }
-    }, 2500);
+    }, 1500);
     return () => clearInterval(id);
   }, [pbipPath, html, onChange]);
 

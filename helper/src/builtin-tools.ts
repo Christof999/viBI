@@ -442,6 +442,76 @@ export const builtInTools: BuiltInTool[] = [
     },
   },
   {
+    name: "replace_in_html",
+    description:
+      "Surgischer Find-and-Replace im aktuell gespeicherten Design-HTML. NUTZE DIESES TOOL FÜR KLEINE ÄNDERUNGEN (Farben, einzelne Texte, Werte) statt das ganze HTML neu zu emittieren. Beispiel: replace_in_html({find: '#F2C811', replaceWith: '#CCCCCC'}) tauscht eine Akzentfarbe. Nach dem Aufruf zeigt die Live-Vorschau im DesignPanel automatisch (Polling alle 2.5s) das Ergebnis.",
+    inputSchema: {
+      type: "object",
+      required: ["find", "replaceWith"],
+      properties: {
+        pbipPath: { type: "string" },
+        find: {
+          type: "string",
+          description:
+            "Exakter String, der im aktuellen HTML gesucht wird. Case-sensitive. Bei Hex-Farben den führenden # mitnehmen.",
+        },
+        replaceWith: {
+          type: "string",
+          description: "Ersetzungsstring. Leerstring zum Löschen erlaubt.",
+        },
+        all: {
+          type: "boolean",
+          description: "Alle Vorkommen ersetzen (default true). Bei false nur das erste.",
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      const find = str(args.find);
+      const replaceWith = typeof args.replaceWith === "string" ? args.replaceWith : "";
+      if (!find) throw new Error("find darf nicht leer sein");
+      const current = getDesignHtml(path);
+      if (current === null) {
+        throw new Error(
+          "Noch kein Design-HTML gespeichert. Erst get_full_page_html aufrufen oder die Design-Phase betreten."
+        );
+      }
+      const all = args.all !== false;
+      let count = 0;
+      let next: string;
+      if (all) {
+        // String.split/join um ALLE Vorkommen ohne RegEx-Escape zu treffen
+        const parts = current.split(find);
+        count = parts.length - 1;
+        next = parts.join(replaceWith);
+      } else {
+        const idx = current.indexOf(find);
+        if (idx >= 0) {
+          next = current.slice(0, idx) + replaceWith + current.slice(idx + find.length);
+          count = 1;
+        } else {
+          next = current;
+        }
+      }
+      if (count === 0) {
+        return {
+          ok: false,
+          replacements: 0,
+          summary: `⚠ '${find}' nicht im aktuellen HTML gefunden. Rufe get_full_page_html auf, um den echten Inhalt zu sehen.`,
+        };
+      }
+      setDesignHtml(path, next);
+      return {
+        ok: true,
+        replacements: count,
+        before: current.length,
+        after: next.length,
+        summary: `✓ ${count}× '${find.slice(0, 40)}${find.length > 40 ? "…" : ""}' → '${replaceWith.slice(0, 40)}${replaceWith.length > 40 ? "…" : ""}' ersetzt. Live-Vorschau aktualisiert sich in 1-3s automatisch.`,
+      };
+    },
+  },
+  {
     name: "embed_full_page_html",
     description:
       "Bettet das aktuell gespeicherte Design-HTML als DAX-Measure in den PBIP-Bericht ein. Das ist der RICHTIGE Power-BI-Weg: HTML kommt als Stringliteral in eine Measure, die der User im 'HTML Content'-Custom-Visual als Value bindet. Schreibt die Measure 'Dashboard HTML' auf die Date-Tabelle (oder die übergebene table). Schreibt zusätzlich eine standalone vibi-design.html in StaticResources.",

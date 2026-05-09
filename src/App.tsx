@@ -91,13 +91,17 @@ export default function App() {
           `  • PLATZIERT auf Seite 1 ein page-fillendes 'HTML Content'-Visual (von https://html-content.com) und bindet die Measure ans 'Values'-Feld. Der User muss NICHT mehr selbst Visual + Bindung machen.\n` +
           `  • Sichert eine standalone vibi-design.html in StaticResources als Backup.\n` +
           `Einzige verbleibende User-Aktion: einmalig die Erweiterung von https://html-content.com installieren, falls PBI Desktop 'Visual fehlt' anzeigt – Bindung und Position bleiben dabei erhalten.\n\n` +
-          `Workflow für JEDE Design-Anpassung:\n` +
-          `1. ZUERST get_full_page_html({pbipPath}) aufrufen – das ist der aktuelle Stand. NIEMALS aus dem Gedächtnis HTML neu generieren – die existierende Vorlage hat schon Header, KPI-Karten, Bar-Chart, Top-Tabelle, Footer mit CI-Farben.\n` +
-          `2. DAS BESTEHENDE HTML als Basis nehmen, gezielt modifizieren (User-Wunsch umsetzen, alles andere lassen).\n` +
-          `3. update_full_page_html({pbipPath, html: <das komplette neue Dokument>}) – die Live-Preview im DesignPanel aktualisiert sich automatisch.\n` +
-          `4. Erst wenn der User explizit „in den Bericht einbetten" / „in PBI" sagt: embed_full_page_html aufrufen. Erkläre dem User in der Antwort die 4 Schritte zum Visual-Setup (Reload PBI, Visual installieren, Visual platzieren, Measure binden).\n` +
-          `5. Antworte dem User KURZ in Bullets: was hast du geändert, wie sieht es aus.\n\n` +
-          `WICHTIG: Niemals halbe Snippets zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe – das Visual läuft im sandboxed iframe ohne Netz. Das HTML wird DAX-string-escaped (Quotes verdoppelt), Newlines werden zu Spaces kollabiert – bau das HTML so dass das ohne Schaden ist.\n\n`
+          `ANTI-LOOP-REGEL (das Wichtigste): Schreibe NIEMALS Sätze wie „Ich aktualisiere jetzt das Design" / „Ich rufe X auf" / „Ich werde das ändern" OHNE im selben Turn den Tool-Aufruf zu machen. Tool-Calls passieren über functionCall, nicht in deinem Antworttext. Wenn du nur beschreibst was du tun willst, passiert NICHTS – die Live-Vorschau bleibt unverändert und der User wartet umsonst. Reihenfolge: ERST tool_call, DANN Text-Bestätigung mit dem 'summary'-Feld aus dem Tool-Resultat.\n\n` +
+          `WERKZEUG-WAHL (wichtig für Performance):\n` +
+          `  • Für KLEINE Änderungen (Farbe, einzelner Text, Wert) IMMER replace_in_html nutzen. Beispiel: User sagt „mach das Gelb grau" → replace_in_html({find: "#F2C811", replaceWith: "#CCCCCC"}). Du musst NICHT vorher get_full_page_html aufrufen, wenn du den find-String sicher kennst. Spart Tokens und ist schneller.\n` +
+          `  • Für MITTLERE Änderungen mit unklarem find-String: zuerst get_full_page_html, dann ein oder mehrere replace_in_html-Aufrufe.\n` +
+          `  • Für GROSSE Restrukturierungen (Layout-Umbau, neue Section): get_full_page_html → komplette neue HTML im Kopf bauen → update_full_page_html mit dem ganzen Dokument.\n` +
+          `  • embed_full_page_html NUR wenn der User explizit „in PBI einbetten" sagt – nicht bei jedem kleinen Tweak.\n\n` +
+          `Workflow:\n` +
+          `1. Tool aufrufen (replace_in_html für klein, get→update für groß).\n` +
+          `2. Antwort: kurze Bestätigung in 1-2 Sätzen + summary aus dem Tool-Resultat. Nicht den geänderten HTML-Code in die Chat-Antwort schreiben (zu lang, sinnlos).\n` +
+          `3. Live-Vorschau im DesignPanel polled jede 1.5s den Helper – Änderung wird automatisch sichtbar.\n\n` +
+          `WICHTIG für update_full_page_html: Niemals halbe Snippets zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe – das Visual läuft im sandboxed iframe ohne Netz.\n\n`
         : "") +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
@@ -111,8 +115,9 @@ export default function App() {
       `- restore_tmdl_backup({pbipPath}): Recovery-Tool – stellt den Stand vor der letzten viBI-Änderung wieder her.\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
       `- get_full_page_html({pbipPath}): aktuelles Design-HTML lesen (Design-Phase).\n` +
-      `- update_full_page_html({pbipPath, html}): Design-HTML aktualisieren (Design-Phase, Live-Preview).\n` +
-      `- embed_full_page_html({pbipPath, html?}): in report.json + StaticResources einbetten.\n` +
+      `- replace_in_html({pbipPath, find, replaceWith, all?}): SURGISCHER find/replace im Design-HTML – das bevorzugte Tool für kleine Änderungen (Farben, Werte, Texte). Spart Tokens.\n` +
+      `- update_full_page_html({pbipPath, html}): komplettes Design-HTML neu schreiben (für große Layout-Umbauten).\n` +
+      `- embed_full_page_html({pbipPath, html?}): Measure schreiben + Visual auf Seite 1 platzieren.\n` +
       `- apply_full_page_html({pbipPath, html}): Alias zu embed_full_page_html.\n` +
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
       `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
