@@ -6,6 +6,7 @@ import express from "express";
 import { mcpRegistry } from "./mcp.js";
 import { applyFullPageHTML, readMetadata, writePBIP } from "./pbip.js";
 import { asToolDescriptors, builtInTools } from "./builtin-tools.js";
+import { getDesignHtml, setDesignHtml, writeStandaloneHtml } from "./design.js";
 import {
   libraryPath,
   loadLibrary,
@@ -182,11 +183,55 @@ app.post("/report/apply-html", (req, res) => {
       res.status(404).json({ ok: false, error: "PBIP nicht gefunden" });
       return;
     }
-    const path = applyFullPageHTML(pbipPath, html);
-    res.json({ ok: true, path });
+    // Drei Ziele parallel: (1) report.json mit HTML-Visual rebauen,
+    // (2) das HTML als persistierten Design-State sichern,
+    // (3) eine standalone .html in StaticResources ablegen, damit der
+    // User auch bei Custom-Visual-Problemen einen Doppelklick-Output hat.
+    let reportJsonPath: string | null = null;
+    let standaloneError: string | null = null;
+    let standalonePath: string | null = null;
+    try {
+      reportJsonPath = applyFullPageHTML(pbipPath, html);
+    } catch (e) {
+      standaloneError = (e as Error).message;
+    }
+    setDesignHtml(pbipPath, html);
+    try {
+      standalonePath = writeStandaloneHtml(pbipPath, html);
+    } catch (e) {
+      standaloneError = standaloneError ?? (e as Error).message;
+    }
+    res.json({
+      ok: !!(reportJsonPath || standalonePath),
+      reportJsonPath,
+      standalonePath,
+      error: standaloneError,
+      hint:
+        "Falls das HTML-Visual in PBI Desktop nicht angezeigt wird: dort manuell 'HTML Content' Custom Visual einfügen und vibi-design.html aus StaticResources/RegisteredResources hineinkopieren.",
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+app.get("/design/html", (req, res) => {
+  const pbipPath = req.query.pbipPath;
+  if (typeof pbipPath !== "string") {
+    res.status(400).json({ ok: false, error: "pbipPath query param erforderlich" });
+    return;
+  }
+  const html = getDesignHtml(pbipPath);
+  res.json({ ok: true, html, exists: html !== null });
+});
+
+app.put("/design/html", (req, res) => {
+  const { pbipPath, html } = req.body ?? {};
+  if (typeof pbipPath !== "string" || typeof html !== "string") {
+    res.status(400).json({ ok: false, error: "pbipPath und html erforderlich" });
+    return;
+  }
+  const path = setDesignHtml(pbipPath, html);
+  res.json({ ok: true, path });
 });
 
 app.post("/project/metadata", (req, res) => {

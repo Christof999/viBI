@@ -62,11 +62,18 @@ export default function App() {
       chat.setExtraSystemPrompt(null);
       return;
     }
+    const phaseLabel =
+      state.phase === "design"
+        ? "DESIGN (HTML-Layout der Berichtsseite)"
+        : state.phase === "modeling"
+        ? "DATENMODELL (Tabellen, Beziehungen, Measures, DAX)"
+        : state.phase;
     const ctx =
       `AKTUELLER BERICHT:\n` +
       `- Name: ${state.project.name}\n` +
       `- Beschreibung/Ziel: ${state.project.goal}\n` +
       `- KPIs: ${state.project.kpis.join(", ") || "—"}\n` +
+      `- Aktive Phase: ${phaseLabel}\n` +
       (state.pbipPath ? `- PBIP-Pfad: ${state.pbipPath}\n` : "") +
       (state.suggestion
         ? `- Vorgeschlagene Tabellen: ${state.suggestion.tables
@@ -74,6 +81,18 @@ export default function App() {
             .join(", ")}\n`
         : "") +
       `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
+      (state.phase === "design"
+        ? `DESIGN-PHASE-FOKUS:\n` +
+          `Du bist NICHT mehr in der Modellierung. KEINE add_measure / add_relationship / add_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
+          `Stattdessen: das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das page-filling als HTML-Visual eingebettet wird. Es lebt im Helper als .vibi-design.html.\n\n` +
+          `Workflow für JEDE Design-Anpassung:\n` +
+          `1. ZUERST get_full_page_html({pbipPath}) aufrufen – das ist der aktuelle Stand. NIEMALS aus dem Gedächtnis HTML neu generieren – die existierende Vorlage hat schon Header, KPI-Karten, Bar-Chart, Top-Tabelle, Footer mit CI-Farben.\n` +
+          `2. DAS BESTEHENDE HTML als Basis nehmen, gezielt modifizieren (User-Wunsch umsetzen, alles andere lassen).\n` +
+          `3. update_full_page_html({pbipPath, html: <das komplette neue Dokument>}) – die Live-Preview im DesignPanel aktualisiert sich automatisch.\n` +
+          `4. Erst wenn der User explizit „in den Bericht einbetten" sagt: embed_full_page_html aufrufen.\n` +
+          `5. Antworte dem User KURZ in Bullets: was hast du geändert, wie sieht es aus.\n\n` +
+          `WICHTIG: Niemals halben Schnipsel zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe. Das Visual läuft im sandboxed iframe ohne Netz.\n\n`
+        : "") +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
       `- list_model({pbipPath}): vollständiger TMDL-Zustand inkl. Measures und Beziehungen.\n` +
@@ -84,7 +103,10 @@ export default function App() {
       `- add_calculated_table({pbipPath, name, expression, dataCategory?}): eine beliebige neue kalkulierte Tabelle anlegen (z.B. CALENDAR(...), SUMMARIZE(...), DISTINCT(...)). Ausdruck single-line.\n` +
       `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): einer Tabelle eine berechnete Spalte hinzufügen (single-line DAX).\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
-      `- apply_full_page_html({pbipPath, html}): page-fillendes HTML-Visual in report.json schreiben.\n` +
+      `- get_full_page_html({pbipPath}): aktuelles Design-HTML lesen (Design-Phase).\n` +
+      `- update_full_page_html({pbipPath, html}): Design-HTML aktualisieren (Design-Phase, Live-Preview).\n` +
+      `- embed_full_page_html({pbipPath, html?}): in report.json + StaticResources einbetten.\n` +
+      `- apply_full_page_html({pbipPath, html}): Alias zu embed_full_page_html.\n` +
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
       `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
       `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).\n\n` +
@@ -107,7 +129,7 @@ export default function App() {
       kpis: state.project.kpis,
       tables: state.suggestion?.tables.map((t) => t.name),
     });
-  }, [state.project, state.suggestion, state.pbipPath]);
+  }, [state.project, state.suggestion, state.pbipPath, state.phase]);
 
   // First boot: route to library if helper has projects
   useEffect(() => {
@@ -224,12 +246,29 @@ export default function App() {
           /* user may have closed already */
         }
       }
-      const html = buildFullPageReport(state.project);
+      // Aktuellen Stand bevorzugen, falls schon mal designed wurde
+      const html = state.fullPageHtml ?? buildFullPageReport(state.project);
+      // Initial-HTML in den Helper schreiben, damit AI und Frontend ab
+      // sofort denselben State sehen
+      if (state.pbipPath) {
+        try {
+          await helper.saveDesignHtml(state.pbipPath, html);
+        } catch {
+          /* helper offline – DesignPanel pusht später erneut */
+        }
+      }
       setState((s) => ({
         ...s,
         phase: "design",
         fullPageHtml: html,
       }));
+      // KI explizit über den Phasenwechsel informieren – sonst weiß sie nichts davon
+      chat.seedAssistant(
+        `Datenmodellierung ist abgeschlossen. Ich bin jetzt in **Phase 2: Design**.\n\n` +
+          `Der Bericht „${state.project.name}" hat bereits ein Initial-HTML (page-fillendes Design mit Header, KPI-Karten, Bar-Chart, Top-Tabelle). ` +
+          `Ich kann das jetzt für dich anpassen – sag mir einfach was du willst (Farben, Layout, KPIs auf andere Werte mappen, …).\n\n` +
+          `Tools die ich in dieser Phase nutze: get_full_page_html (aktuellen Stand lesen), update_full_page_html (deine Änderung im Live-Preview anzeigen), embed_full_page_html (in den PBI-Bericht einbetten).`
+      );
     } finally {
       setBusy(false);
     }

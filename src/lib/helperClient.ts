@@ -138,10 +138,31 @@ export const helper = {
   applyFullPageHTML(input: {
     pbipPath: string;
     html: string;
-  }): Promise<{ ok: boolean; path: string }> {
+  }): Promise<{
+    ok: boolean;
+    reportJsonPath?: string | null;
+    standalonePath?: string | null;
+    error?: string | null;
+    hint?: string;
+  }> {
     return req("/report/apply-html", {
       method: "POST",
       body: JSON.stringify(input),
+    });
+  },
+
+  getDesignHtml(pbipPath: string): Promise<{
+    ok: boolean;
+    html: string | null;
+    exists: boolean;
+  }> {
+    return req(`/design/html?pbipPath=${encodeURIComponent(pbipPath)}`);
+  },
+
+  saveDesignHtml(pbipPath: string, html: string): Promise<{ ok: boolean; path: string }> {
+    return req("/design/html", {
+      method: "PUT",
+      body: JSON.stringify({ pbipPath, html }),
     });
   },
 };

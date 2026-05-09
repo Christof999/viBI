@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { helper } from "../lib/helperClient";
 import { inlineForHtmlVisual } from "../lib/snippets";
 import type { ProjectConfig } from "../types";
@@ -17,8 +17,69 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
   const [mode, setMode] = useState<ViewMode>("preview");
   const [copied, setCopied] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
+  const lastPushedRef = useRef<string>("");
+
+  // 1) Beim Mount: schauen, ob der Helper schon ein gespeichertes HTML hat
+  //    (z.B. weil die KI vorher update_full_page_html aufgerufen hat).
+  //    Falls ja, dem Frontend übernehmen.
+  useEffect(() => {
+    if (!pbipPath) return;
+    let cancelled = false;
+    helper
+      .getDesignHtml(pbipPath)
+      .then((r) => {
+        if (cancelled) return;
+        if (r.exists && r.html && r.html !== html) {
+          onChange(r.html);
+          lastPushedRef.current = r.html;
+        } else {
+          // erstmaliger Eintritt: aktuellen Frontend-State an den Helper pushen
+          helper.saveDesignHtml(pbipPath, html).catch(() => {});
+          lastPushedRef.current = html;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // intentional: nur einmal beim ersten Mount für diesen pbipPath
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pbipPath]);
+
+  // 2) Frontend-Änderungen (User tippt im Editor) → debounced an Helper pushen
+  useEffect(() => {
+    if (!pbipPath) return;
+    if (html === lastPushedRef.current) return;
+    const t = setTimeout(() => {
+      helper
+        .saveDesignHtml(pbipPath, html)
+        .then(() => {
+          lastPushedRef.current = html;
+        })
+        .catch(() => {});
+    }, 500);
+    return () => clearTimeout(t);
+  }, [html, pbipPath]);
+
+  // 3) KI-Änderungen → poll alle 2.5s, falls der Helper neueres HTML hat
+  useEffect(() => {
+    if (!pbipPath) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await helper.getDesignHtml(pbipPath);
+        if (r.exists && r.html && r.html !== lastPushedRef.current && r.html !== html) {
+          onChange(r.html);
+          lastPushedRef.current = r.html;
+          setStatus({ kind: "ok", text: "🤖 KI hat das HTML aktualisiert" });
+          setTimeout(() => setStatus(null), 2500);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 2500);
+    return () => clearInterval(id);
+  }, [pbipPath, html, onChange]);
 
   const copy = async () => {
     await navigator.clipboard.writeText(inlineForHtmlVisual(html));
@@ -28,17 +89,24 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
 
   const apply = async () => {
     if (!pbipPath) {
-      setError("Kein PBIP-Pfad bekannt – Bericht zuerst speichern.");
+      setStatus({ kind: "err", text: "Kein PBIP-Pfad bekannt – Bericht zuerst speichern." });
       return;
     }
     setApplying(true);
-    setError(null);
+    setStatus(null);
     try {
       const r = await helper.applyFullPageHTML({ pbipPath, html });
-      setApplied(`In ${r.path} eingebettet`);
-      setTimeout(() => setApplied(null), 4000);
+      const parts: string[] = [];
+      if (r.reportJsonPath) parts.push(`✓ report.json (${r.reportJsonPath})`);
+      if (r.standalonePath) parts.push(`✓ standalone HTML (${r.standalonePath})`);
+      if (r.error) parts.push(`⚠ ${r.error}`);
+      const msg = parts.join(" · ") + (r.hint ? ` — ${r.hint}` : "");
+      setStatus({
+        kind: r.error && !r.reportJsonPath ? "warn" : "ok",
+        text: msg || "Eingebettet.",
+      });
     } catch (e) {
-      setError((e as Error).message);
+      setStatus({ kind: "err", text: (e as Error).message });
     } finally {
       setApplying(false);
     }
@@ -95,17 +163,28 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
         </div>
       </motion.div>
 
-      {(error || applied) && (
+      {status && (
         <div
           style={{
             padding: "8px 20px",
-            background: error ? "rgba(220,80,80,.12)" : "rgba(80,200,120,.12)",
+            background:
+              status.kind === "err"
+                ? "rgba(220,80,80,.12)"
+                : status.kind === "warn"
+                ? "rgba(220,180,80,.12)"
+                : "rgba(80,200,120,.12)",
             borderBottom: "1px solid var(--border)",
             fontSize: 12,
-            color: error ? "var(--danger)" : "var(--ok)",
+            color:
+              status.kind === "err"
+                ? "var(--danger)"
+                : status.kind === "warn"
+                ? "var(--accent)"
+                : "var(--ok)",
+            wordBreak: "break-word",
           }}
         >
-          {error ?? applied}
+          {status.text}
         </div>
       )}
 

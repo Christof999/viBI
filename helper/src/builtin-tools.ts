@@ -19,6 +19,7 @@ import {
 } from "./tmdl.js";
 import { looksLikeViBIPlaceholder, readLiveModel } from "./live-model.js";
 import { bestPbipFor, findRecentPbips } from "./pbip-discovery.js";
+import { getDesignHtml, setDesignHtml, writeStandaloneHtml } from "./design.js";
 
 export interface BuiltInTool {
   name: string;
@@ -356,6 +357,103 @@ export const builtInTools: BuiltInTool[] = [
         ...r,
         summary,
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
+    },
+  },
+  {
+    name: "get_full_page_html",
+    description:
+      "Liest das aktuell gestaltete page-fillende HTML des Berichts (gespeichert neben der .pbip als .vibi-design.html). Wenn nichts gespeichert ist, liefert null. Im Design-Phase IMMER zuerst aufrufen, bevor du das HTML änderst – sonst überschreibst du das Frontend.",
+    inputSchema: {
+      type: "object",
+      properties: { pbipPath: { type: "string" } },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      const html = getDesignHtml(path);
+      return {
+        exists: html !== null,
+        html: html ?? "",
+        characterCount: html?.length ?? 0,
+        summary:
+          html === null
+            ? "Noch kein Design-HTML gespeichert."
+            : `Aktuelles Design-HTML: ${html.length.toLocaleString("de-DE")} Zeichen`,
+      };
+    },
+  },
+  {
+    name: "update_full_page_html",
+    description:
+      "Aktualisiert das page-fillende HTML des Berichts. Liefere ein vollständiges, valides HTML-Dokument (mit <html>, <head><style>, <body>) – KEINE Snippets, weil das Visual später als Ganzes eingebettet wird. Das Frontend zeigt Live-Preview im iframe; eingebettet wird erst, wenn der User auf 'In Bericht einbetten' klickt oder du embed_full_page_html aufrufst.",
+    inputSchema: {
+      type: "object",
+      required: ["html"],
+      properties: {
+        pbipPath: { type: "string" },
+        html: {
+          type: "string",
+          description:
+            "Komplettes HTML-Dokument. Muss <html>, <head> mit <style>, <body> enthalten. Inline-CSS bevorzugen, damit nichts extern geladen werden muss.",
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      const html = str(args.html);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!html) throw new Error("html erforderlich");
+      const out = setDesignHtml(path, html);
+      return {
+        ok: true,
+        path: out,
+        characterCount: html.length,
+        summary: `✓ Design-HTML aktualisiert (${html.length.toLocaleString("de-DE")} Zeichen). Vorschau im DesignPanel aktualisiert sich automatisch.`,
+      };
+    },
+  },
+  {
+    name: "embed_full_page_html",
+    description:
+      "Nimmt das aktuell gespeicherte Design-HTML (aus get_full_page_html) und schreibt es in die report.json des PBIP, plus eine standalone vibi-design.html in StaticResources. Aufrufen, sobald der User mit dem Design zufrieden ist. Optional kann html direkt mitgegeben werden – sonst wird der gespeicherte Stand verwendet.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pbipPath: { type: "string" },
+        html: { type: "string", description: "Optional. Default = der per update_full_page_html gespeicherte Stand." },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      const html = str(args.html) ?? getDesignHtml(path);
+      if (!html) {
+        throw new Error(
+          "Kein HTML übergeben und keins gespeichert. Erst update_full_page_html aufrufen oder html-Parameter übergeben."
+        );
+      }
+      let reportJsonPath: string | null = null;
+      let embedError: string | null = null;
+      try {
+        reportJsonPath = applyFullPageHTML(path, html);
+      } catch (e) {
+        embedError = (e as Error).message;
+      }
+      const standalonePath = writeStandaloneHtml(path, html);
+      // Persistieren, damit sich Frontend und KI weiter synchron sehen
+      setDesignHtml(path, html);
+      return {
+        ok: !!(reportJsonPath || standalonePath),
+        reportJsonPath,
+        standalonePath,
+        embedError,
+        summary: reportJsonPath
+          ? `✓ HTML in report.json eingebettet (${reportJsonPath}) und parallel als ${standalonePath} abgelegt.`
+          : `⚠ Einbettung in report.json fehlgeschlagen (${embedError}). HTML aber als ${standalonePath} gesichert – im PBI Desktop manuell ein 'HTML Content' Visual einfügen und Inhalt einkopieren.`,
+        reloadHint: reportJsonPath
+          ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen, damit das HTML-Visual erscheint."
+          : undefined,
       };
     },
   },
