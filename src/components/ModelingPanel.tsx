@@ -150,8 +150,9 @@ export function ModelingPanel({
             </li>
             <li>
               Im Chat rechts: „Welche Tabellen sind aktuell geladen?" – viBI liest live aus dem
-              PBI-Workspace und kann dann Beziehungen, Measures und eine Datumstabelle direkt
-              anlegen.
+              PBI-Workspace und legt pro KPI eine passende Measure + Datumstabelle an. Beziehungen
+              werden NICHT automatisch erzeugt (das HTML-Dashboard kommt ohne aus, und sie sind
+              die häufigste Fehlerquelle).
             </li>
             <li>
               Klick „Modell fertig" sobald du zufrieden bist – führt dich ins Design.

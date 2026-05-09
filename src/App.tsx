@@ -102,12 +102,13 @@ export default function App() {
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
       `- list_model({pbipPath}): vollständiger TMDL-Zustand inkl. Measures und Beziehungen.\n` +
-      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen.\n` +
-      `- add_relationship({pbipPath, fromTable, fromColumn, toTable, toColumn, crossFilteringBehavior?, isActive?}): Beziehung anlegen (from = Many-Seite/Faktentabelle, to = One-Seite/Dimension).\n` +
-      `- remove_relationship({pbipPath, id}): Beziehung löschen.\n` +
+      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen. **Standard-Werkzeug für KPIs.**\n` +
       `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle (Date + Year/Quarter/Month/MonthName/YearMonth) anlegen.\n` +
-      `- add_calculated_table({pbipPath, name, expression, dataCategory?}): eine beliebige neue kalkulierte Tabelle anlegen (z.B. CALENDAR(...), SUMMARIZE(...), DISTINCT(...)). Ausdruck single-line.\n` +
-      `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): einer Tabelle eine berechnete Spalte hinzufügen (single-line DAX).\n` +
+      `- add_calculated_table({pbipPath, name, expression, dataCategory?}): beliebige neue kalkulierte Tabelle anlegen (z.B. SUMMARIZE, DISTINCT). Single-line.\n` +
+      `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): calc column hinzufügen.\n` +
+      `- add_relationship({...}) / remove_relationship({pbipPath, id}): NUR auf explizite User-Anforderung. Standard-Workflow legt KEINE Beziehungen an, weil das HTML-Dashboard ohne sie auskommt und sie die häufigste Fehlerquelle sind.\n` +
+      `- fix_ambiguous_relationships({pbipPath}): Recovery-Tool – entfernt Duplikate, deaktiviert mehrfach-aktive Beziehungen.\n` +
+      `- restore_tmdl_backup({pbipPath}): Recovery-Tool – stellt den Stand vor der letzten viBI-Änderung wieder her.\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
       `- get_full_page_html({pbipPath}): aktuelles Design-HTML lesen (Design-Phase).\n` +
       `- update_full_page_html({pbipPath, html}): Design-HTML aktualisieren (Design-Phase, Live-Preview).\n` +
@@ -120,14 +121,13 @@ export default function App() {
       `Wenn read_pbip_metadata 'source' = 'none' liefert oder isPlaceholder=true zurückgibt: rufe SOFORT find_pbips auf (mit nameContains=Projektname), schau in das Ergebnis und wähle den .pbip mit dem passenden Namen. Erst wenn auch find_pbips leer ist, sage dem User, dass er Strg+S in PBI Desktop drücken soll. ` +
       `Erfinde NIE Tabellen, die nicht in einem Tool-Resultat 'tables' stehen.\n\n` +
       `MODELLIERUNGS-REIHENFOLGE (verbindlich):\n` +
-      `1. Zuerst IMMER list_model aufrufen, um den aktuellen Stand zu sehen (Tabellen, Spalten, Measures, BESTEHENDE BEZIEHUNGEN). Erfinde NIE Spaltennamen – nimm sie 1:1 aus list_model.tables[].columns[].name. Wenn die KI „OrderID" o.ä. annehmen will, prüfe vorher ob eine Spalte exakt so heißt; sonst Tool-Aufruf mit echtem Namen aus dem Modell.\n` +
-      `2. Beziehungen NICHT doppelt anlegen. Wenn list_model schon eine Beziehung zwischen zwei Spalten zeigt, NIE add_relationship dafür aufrufen.\n` +
-      `3. add_date_table NUR wenn list_model keine Tabelle namens 'Date' enthält. Frische viBI-Projekte haben bereits eine Datumstabelle.\n` +
-      `4. Schritte planen: 1 list_model, dann ggf. 1 add_date_table, dann pro Faktentabelle EINE add_relationship zur Date-Tabelle, dann pro KPI EIN add_measure. Nicht mehr.\n` +
-      `5. POWER-BI-BEZIEHUNGSREGEL: Pro Tabellenpaar darf nur EINE aktive Beziehung existieren. Wenn z.B. Orders zwei Datumsspalten (OrderDate, ShippedDate) hat, die beide auf Date.Date zeigen sollen, ist NUR die eine die "Aktive"; die andere muss isActive=false sein (in DAX via USERELATIONSHIP nutzbar). add_relationship erkennt das automatisch und legt die zweite als inactive an, ABER: plan trotzdem im Voraus, welche du als Standard-Aktive willst, und übergib für die anderen explizit isActive=false. Ignorierst du das, kriegt PBI Desktop den Fehler PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH und der Bericht öffnet nicht mehr.\n` +
-      `6. NACH ALLEN SCHREIB-TOOLS: rufe verify_model auf mit den expectedTables/expectedRelationships/expectedMeasures, die du gerade angelegt hast. Wenn ambiguousPaths nicht leer ist, rufe SOFORT fix_ambiguous_relationships auf – das deaktiviert die zweiten/dritten aktiven Beziehungen automatisch.\n` +
-      `7. AM ENDE IMMER eine kurze deutsche Textantwort schicken, die: (a) jeden 'summary'-Satz aus den Tool-Resultaten zusammenfasst (✓/↩︎/⚠️/🚨), (b) das verify_model-Ergebnis erwähnt (X/Y Tabellen ok, etc.), (c) den reloadHint einmal nennt. Format: kurze Bullet-Liste. Kein Kommentar = User denkt du bist hängengeblieben.\n\n` +
-      `RECOVERY: Wenn der User berichtet, dass PBI Desktop einen Fehler beim Öffnen wirft (Variation-Pfad nicht gefunden / mehrdeutige Beziehungen / TMDL-Format-Fehler), rufe SOFORT restore_tmdl_backup auf. Das stellt den Stand von vor der letzten viBI-Änderung wieder her. Erkläre dem User danach, was reverted wurde, und frage ob er die Änderung anders versuchen will.`;
+      `1. Zuerst IMMER list_model aufrufen. Erfinde NIE Spaltennamen – nimm sie 1:1 aus list_model.tables[].columns[].name.\n` +
+      `2. add_date_table NUR wenn list_model keine Tabelle namens 'Date' enthält. Frische viBI-Projekte haben bereits eine.\n` +
+      `3. Pro KPI EIN add_measure aufrufen. Der DAX-Ausdruck soll AUF EINE TABELLE bezogen sein (SUM(Sales[Quantity]), AVERAGE(Customer[Score]) etc.). Cross-table-Logik (RELATED, USERELATIONSHIP) NICHT verwenden.\n` +
+      `4. KEINE add_relationship-Aufrufe! Hintergrund: Das spätere HTML-Dashboard rendert seine Werte über das Measure-HTML, nicht über Power-BI-Joins. Tabellen-Beziehungen sind für den Dashboard-Output IRRELEVANT und nur eine Fehlerquelle (mehrdeutige Pfade, fehlende Spalten, kaputte Variations). Wenn der User explizit „lege Beziehung X→Y an" sagt, dann – und nur dann – darfst du add_relationship benutzen. Sonst nicht.\n` +
+      `5. NACH ALLEN SCHREIB-TOOLS: verify_model mit expectedTables und expectedMeasures aufrufen (expectedRelationships leer lassen).\n` +
+      `6. AM ENDE eine kurze deutsche Bullet-Antwort: welche Measures angelegt (mit Formel), Reload-Hinweis (Datei→schließen ohne Speichern→erneut öffnen). Kein Kommentar = User denkt du hängst.\n\n` +
+      `BEZIEHUNGS-RECOVERY-WERKZEUGE (nur falls explizit angefragt oder Bericht beschädigt): add_relationship, remove_relationship, fix_ambiguous_relationships, restore_tmdl_backup. Wenn der User berichtet, dass PBI Desktop beim Öffnen einen Fehler wirft (Variation-Pfad / mehrdeutige Beziehungen / TMDL-Format), rufe SOFORT restore_tmdl_backup auf.`;
     chat.setExtraSystemPrompt(ctx);
     chat.setToolArgDefaults({
       pbipPath: state.pbipPath,
@@ -202,8 +202,13 @@ export default function App() {
   const onAcceptTables = async (suggestion: TableSuggestion) => {
     if (!state.project) return;
     setState((s) => ({ ...s, suggestion, modelingStep: "working" }));
-    // Chat-getriebene Modellierung: KI nutzt list_model, add_relationship,
-    // add_measure, add_date_table direkt auf der TMDL.
+    // Chat-getriebene Modellierung. WICHTIG: Da das spätere HTML-Dashboard
+    // ein gerendertes HTML-Visual ist (Werte hartkodiert in der DAX-Measure),
+    // brauchen wir KEINE Tabellen-Beziehungen im Modell. Skipping
+    // add_relationship eliminiert die häufigste Fehlerklasse
+    // (PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH, broken column refs,
+    // variation-orphans). Falls der User später echte cross-table-DAX braucht,
+    // kann er Beziehungen explizit anlegen.
     const tableLine = suggestion.tables
       .map((t) => `${t.name} (${t.keyColumns.join(", ")})`)
       .join("\n - ");
@@ -216,10 +221,10 @@ export default function App() {
         `Geplante KPIs: ${kpiLine}\n\n` +
         `Schritte:\n` +
         `1. list_model aufrufen, um den aktuellen TMDL-Zustand zu sehen.\n` +
-        `2. Falls keine Datumstabelle existiert, add_date_table aufrufen.\n` +
-        `3. Sinnvolle Beziehungen via add_relationship anlegen (Faktentabelle → Dimension).\n` +
-        `4. Pro KPI ein passendes DAX-Measure via add_measure anlegen (mit formatString und displayFolder "Measures").\n` +
-        `5. Am Ende eine kurze deutsche Zusammenfassung, was du angelegt hast und welche Reload-Hinweise gelten.`
+        `2. Pro KPI ein passendes DAX-Measure via add_measure anlegen. Der Ausdruck soll PER TABELLE aggregieren (z.B. SUM(Sales[Quantity]), AVERAGE(Customer[CreditLimit])) – KEINE cross-table-Aggregation, denn wir legen KEINE Beziehungen an. displayFolder: "Measures".\n` +
+        `3. KEINE add_relationship-Aufrufe! Das HTML-Dashboard rendert seine Werte direkt über die Measure-Strings, nicht über Modell-Joins. Beziehungen wären nur Fehlerquellen.\n` +
+        `4. verify_model NUR mit expectedMeasures aufrufen (Beziehungen sind irrelevant).\n` +
+        `5. Am Ende eine kurze deutsche Zusammenfassung: welche Measures angelegt, ein Bullet pro Measure mit Name + Formel, plus Reload-Hinweis (Datei→schließen ohne Speichern→neu öffnen).`
     );
   };
 

@@ -147,8 +147,9 @@ export function TableProposal({ project, initial, onAccept, onRequestDifferent }
           <strong style={{ color: "var(--text)" }}>So gehst du vor:</strong> Lade die oben gelisteten
           Tabellen in Power BI Desktop (Daten abrufen → Business Central / OData / Fabric Mirror).
           Sobald alle Tabellen importiert <em>und der Bericht gespeichert</em> ist, klick auf
-          „Tabellen geladen". viBI ruft den Microsoft-Fabric-MCP auf, der Beziehungen, Measures und
-          Datumstabelle automatisch passend zu deiner Anforderung anlegt.
+          „Tabellen geladen". viBI legt dann pro KPI eine passende DAX-Measure an. Tabellen-
+          Beziehungen werden bewusst NICHT automatisch erzeugt – das HTML-Dashboard rendert
+          später ohne sie und sie wären nur eine Fehlerquelle.
         </section>
       </motion.div>
     </main>
