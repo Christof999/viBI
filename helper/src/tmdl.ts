@@ -274,7 +274,6 @@ export function removeMeasure(
   let removed = 0;
   let skipping = false;
   let measureIndent = 0;
-  // Erkennt eine measure-Zeile mit gegebenem Namen, optional mit/ohne Quotes.
   const headerRe = new RegExp(
     `^(\\s*)measure\\s+(?:'${escapeRegex(measureName)}'|${escapeRegex(measureName)})\\s*(?:=|$)`
   );
@@ -284,7 +283,6 @@ export function removeMeasure(
     if (!skipping) {
       const m = line.match(headerRe);
       if (m) {
-        // Beginn eines zu entfernenden Measure-Blocks
         skipping = true;
         measureIndent = m[1].length;
         removed++;
@@ -293,21 +291,9 @@ export function removeMeasure(
       out.push(line);
       continue;
     }
-    // skipping == true: alle Folgezeilen mit größerer Einrückung gehören zum
-    // Measure-Block. Eine leere Zeile beendet den Block NICHT (Properties
-    // dürfen leere Zeilen dazwischen haben). Eine Zeile mit gleicher oder
-    // kleinerer Einrückung als der Measure-Header beendet den Block.
-    if (line.trim() === "") {
-      // Leerzeilen innerhalb des Measure-Blocks droppen
-      continue;
-    }
+    if (line.trim() === "") continue;
     const lineIndent = line.match(/^\s*/)![0].length;
-    if (lineIndent > measureIndent) {
-      // Property-Zeile innerhalb des Measure-Blocks → droppen
-      continue;
-    }
-    // Geschwister oder Top-Level → Measure-Block beendet, diese Zeile
-    // wieder normal aufnehmen
+    if (lineIndent > measureIndent) continue;
     skipping = false;
     out.push(line);
   }
@@ -315,7 +301,6 @@ export function removeMeasure(
   if (removed === 0) {
     return { ok: false, path: file.filePath, removedCount: 0 };
   }
-  // Doppelte Leerzeilen normalisieren, die durch das Skippen entstehen
   const cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n");
   return {
     ok: true,
@@ -324,25 +309,60 @@ export function removeMeasure(
   };
 }
 
-// Wandelt ein HTML-Dokument in einen DAX-String-Literal um, der
-// 1) auf eine Zeile passt (TMDL-Parser pingelig bei Multi-Line ohne Fence),
-// 2) keine Zeichen enthält, die DAX/TMDL falsch interpretiert.
-//
-// Verfahren:
-//  - alle Whitespace-Sequenzen (Newline, Tab, mehrfach-Space) → einzelnes
-//    Leerzeichen kollabieren (zwischen HTML-Tags ist Whitespace semantikfrei)
-//  - Doppel-Quotes verdoppeln (DAX-String-Escape)
-//  - Control-Characters außer Tab/Newline (die schon collapsed sind) entfernen
+// Wandelt ein HTML-Dokument in eine DAX-Expression, die zur Laufzeit das HTML
+// mit echten Measure-Werten produziert. Placeholder-Syntax in der Vorlage:
+//   {{Tabelle[Measure]}}              → FORMAT([Measure], "#,##0.##")
+//   {{Measure}}                       → FORMAT([Measure], "#,##0.##")
+//   {{Tabelle[Measure]:€#,##0.00}}    → FORMAT([Measure], "€#,##0.00")
+//   {{[Measure]:0.00%}}               → FORMAT([Measure], "0.00%")
+// Output ist eine DAX-& -Konkatenation, z.B.
+//   "<div>" & FORMAT([Gesamtumsatz], "#,##0") & "</div>"
+// Ohne Placeholder ist das Ergebnis ein einzelnes String-Literal.
 export function htmlToDaxLiteral(html: string): string {
   const cleaned = html
-    // Control-Chars (außer \t \n \r) die manche HTML-Editoren produzieren
-    .replace(/[ --]/g, "")
     .replace(/\r\n?/g, "\n")
     .replace(/[\n\t]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
-  const escaped = cleaned.replace(/"/g, '""');
-  return `"${escaped}"`;
+
+  const placeholderRe = /\{\{\s*([^{}]+?)\s*\}\}/g;
+  const parts: string[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = placeholderRe.exec(cleaned))) {
+    const literal = cleaned.slice(lastIdx, match.index);
+    if (literal.length > 0) parts.push(daxStringLiteral(literal));
+    parts.push(daxFormatExpression(match[1].trim()));
+    lastIdx = match.index + match[0].length;
+  }
+  const tail = cleaned.slice(lastIdx);
+  if (tail.length > 0) parts.push(daxStringLiteral(tail));
+  if (parts.length === 0) return '""';
+  return parts.join(" & ");
+}
+
+function daxStringLiteral(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function daxFormatExpression(ref: string): string {
+  let body = ref;
+  let format = "#,##0.##";
+  const lastClose = ref.lastIndexOf("]");
+  const colonIdx = ref.lastIndexOf(":");
+  if (colonIdx > lastClose && colonIdx >= 0) {
+    const after = ref.slice(colonIdx + 1).trim();
+    if (after.length > 0) {
+      body = ref.slice(0, colonIdx).trim();
+      format = after;
+    }
+  }
+  let measure = body.trim();
+  const tabBracket = measure.match(/^'?([^'[\]]+?)'?\s*\[\s*(.+?)\s*\]$/);
+  if (tabBracket) measure = `[${tabBracket[2]}]`;
+  else if (!measure.startsWith("[")) measure = `[${measure}]`;
+  const fmtEscaped = format.replace(/"/g, '""');
+  return `FORMAT(${measure}, "${fmtEscaped}")`;
 }
 
 export function addMeasure(

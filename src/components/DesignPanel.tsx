@@ -231,7 +231,7 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
           <iframe
             title="Bericht-Preview"
             sandbox="allow-same-origin"
-            srcDoc={html}
+            srcDoc={renderPreviewHtml(html)}
             style={{
               width: "100%",
               height: "100%",
@@ -261,6 +261,27 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
       </div>
     </main>
   );
+}
+
+// In der Live-Vorschau ersetzen wir {{Tabelle[Measure]}}-Placeholder durch
+// einen erkennbaren Chip mit Beispiel-Zahl, damit der User sofort sieht wo
+// später der dynamische Measure-Wert landet. Im PBI-Bericht wird die
+// Placeholder beim Embed in eine DAX-FORMAT-Konkatenation umgesetzt.
+function renderPreviewHtml(html: string): string {
+  let counter = 0;
+  return html.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_full, ref) => {
+    counter++;
+    const sampleNumbers = ["1.234", "82,4 %", "9.870", "5.432", "12.450", "3.120"];
+    const sample = sampleNumbers[counter % sampleNumbers.length];
+    const labelEsc = String(ref)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    return (
+      `<span title="${labelEsc}" style="display:inline-block;padding:1px 8px;background:#fff5cc;border:1px dashed #d6a700;border-radius:6px;color:#665200;font-style:italic;font-size:0.9em">${sample}</span>`
+    );
+  });
 }
 
 function ToggleButton({

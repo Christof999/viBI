@@ -85,6 +85,14 @@ export default function App() {
         ? `DESIGN-PHASE-FOKUS:\n` +
           `Du bist NICHT mehr in der Modellierung. KEINE add_relationship / add_calculated_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
           `Das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das in Power BI über das 'HTML Content'-Custom-Visual von https://html-content.com gerendert wird. Es lebt im Helper als .vibi-design.html.\n\n` +
+          `LIVE-WERTE im HTML (sehr wichtig):\n` +
+          `Damit Zahlen aus den im Modellierungs-Schritt angelegten Measures (Gesamtumsatz, Anzahl Kunden etc.) im Dashboard live erscheinen, NUTZE PLACEHOLDER-Syntax im HTML:\n` +
+          `  • {{Measure}}                 z.B. {{Gesamtumsatz}}                → FORMAT([Gesamtumsatz], "#,##0.##")\n` +
+          `  • {{Tabelle[Measure]}}        z.B. {{Invoices[Anzahl Kunden]}}     → FORMAT([Anzahl Kunden], "#,##0.##")\n` +
+          `  • {{Measure:format}}          z.B. {{Gesamtumsatz:€#,##0.00}}      → FORMAT([Gesamtumsatz], "€#,##0.00")\n` +
+          `  • {{Tabelle[Measure]:format}} z.B. {{Invoices[Wachstum]:0.0%}}     → FORMAT([Wachstum], "0.0%")\n` +
+          `Beim Embed (embed_full_page_html / In-Bericht-einbetten) wandelt viBI diese Placeholder in eine DAX-Konkatenation um, sodass die Measure 'Dashboard HTML' das HTML mit echten Werten produziert. In der Live-Vorschau werden Placeholder als gelbe Chips mit Beispiel-Zahlen angezeigt – das ist erwartet, im PBI-Bericht stehen dort die echten Werte.\n\n` +
+          `WICHTIG: Schreibe NIEMALS die Werte fest in HTML. Statt <div class="value">1.234</div> immer <div class="value">{{MeasureName}}</div>. Die Format-Suffixe wählst du KPI-spezifisch: Geld → "€#,##0.00" / "#,##0 €", Prozent → "0.0%", Anzahl → "#,##0", Datum → "DD.MM.YYYY".\n\n` +
           `EMBEDDING-MECHANISMUS (sehr wichtig zu verstehen):\n` +
           `embed_full_page_html macht beim Aufruf DREI Dinge gleichzeitig:\n` +
           `  • Schreibt das HTML als DAX-Stringliteral in eine Measure 'Dashboard HTML' (Tabelle 'Date', Anzeige-Ordner '_viBI'). Idempotent (replace=true).\n` +
