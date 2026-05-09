@@ -138,12 +138,18 @@ export const helper = {
   applyFullPageHTML(input: {
     pbipPath: string;
     html: string;
+    table?: string;
+    measureName?: string;
   }): Promise<{
     ok: boolean;
+    measurePath?: string | null;
+    measureName?: string;
+    table?: string;
+    replaced?: boolean;
     reportJsonPath?: string | null;
     standalonePath?: string | null;
     error?: string | null;
-    hint?: string;
+    userInstructions?: string[];
   }> {
     return req("/report/apply-html", {
       method: "POST",

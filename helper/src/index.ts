@@ -7,6 +7,7 @@ import { mcpRegistry } from "./mcp.js";
 import { applyFullPageHTML, readMetadata, writePBIP } from "./pbip.js";
 import { asToolDescriptors, builtInTools } from "./builtin-tools.js";
 import { getDesignHtml, setDesignHtml, writeStandaloneHtml } from "./design.js";
+import { addMeasure, htmlToDaxLiteral } from "./tmdl.js";
 import {
   libraryPath,
   loadLibrary,
@@ -174,7 +175,7 @@ app.delete("/library/ci-presets/:id", (req, res) => {
 
 app.post("/report/apply-html", (req, res) => {
   try {
-    const { pbipPath, html } = req.body ?? {};
+    const { pbipPath, html, table, measureName } = req.body ?? {};
     if (typeof pbipPath !== "string" || typeof html !== "string") {
       res.status(400).json({ ok: false, error: "pbipPath und html erforderlich" });
       return;
@@ -183,31 +184,63 @@ app.post("/report/apply-html", (req, res) => {
       res.status(404).json({ ok: false, error: "PBIP nicht gefunden" });
       return;
     }
-    // Drei Ziele parallel: (1) report.json mit HTML-Visual rebauen,
-    // (2) das HTML als persistierten Design-State sichern,
-    // (3) eine standalone .html in StaticResources ablegen, damit der
-    // User auch bei Custom-Visual-Problemen einen Doppelklick-Output hat.
+    const targetTable = typeof table === "string" && table ? table : "Date";
+    const targetMeasure =
+      typeof measureName === "string" && measureName ? measureName : "Dashboard HTML";
+
+    // Power-BI-konformer Embed-Pfad: HTML in eine DAX-Measure ablegen.
+    // Der User bindet diese im 'HTML Content'-Custom-Visual als Value.
+    let measurePath: string | null = null;
+    let measureError: string | null = null;
+    let replaced = false;
+    try {
+      const r = addMeasure(pbipPath, {
+        table: targetTable,
+        name: targetMeasure,
+        expression: htmlToDaxLiteral(html),
+        displayFolder: "_viBI",
+        replace: true,
+      });
+      measurePath = r.path;
+      replaced = !!r.replaced;
+    } catch (e) {
+      measureError = (e as Error).message;
+    }
+
+    // Optional: legacy report.json embed weiterhin als best-effort, falls in
+    // älteren Power-BI-Desktops verwendet
     let reportJsonPath: string | null = null;
-    let standaloneError: string | null = null;
-    let standalonePath: string | null = null;
     try {
       reportJsonPath = applyFullPageHTML(pbipPath, html);
-    } catch (e) {
-      standaloneError = (e as Error).message;
+    } catch {
+      /* non-critical */
     }
+
     setDesignHtml(pbipPath, html);
+    let standalonePath: string | null = null;
     try {
       standalonePath = writeStandaloneHtml(pbipPath, html);
-    } catch (e) {
-      standaloneError = standaloneError ?? (e as Error).message;
+    } catch {
+      /* non-critical */
     }
+
     res.json({
-      ok: !!(reportJsonPath || standalonePath),
+      ok: !!measurePath,
+      measurePath,
+      measureName: targetMeasure,
+      table: targetTable,
+      replaced,
       reportJsonPath,
       standalonePath,
-      error: standaloneError,
-      hint:
-        "Falls das HTML-Visual in PBI Desktop nicht angezeigt wird: dort manuell 'HTML Content' Custom Visual einfügen und vibi-design.html aus StaticResources/RegisteredResources hineinkopieren.",
+      error: measureError,
+      userInstructions: measurePath
+        ? [
+            "PBI Desktop schließen (ohne Speichern!) und erneut öffnen, damit die Measure geladen wird.",
+            "'HTML Content'-Custom-Visual von https://html-content.com installieren, falls noch nicht da (Visualisierungen → '...' → AppSource).",
+            "Visual auf der Seite einfügen und über die ganze Fläche ziehen.",
+            `Measure '${targetMeasure}' (Tabelle '${targetTable}', Anzeige-Ordner '_viBI') als 'Value' / 'Wert' des HTML-Visuals binden.`,
+          ]
+        : [],
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });

@@ -87,6 +87,8 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const [instructions, setInstructions] = useState<string[] | null>(null);
+
   const apply = async () => {
     if (!pbipPath) {
       setStatus({ kind: "err", text: "Kein PBIP-Pfad bekannt – Bericht zuerst speichern." });
@@ -94,17 +96,20 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
     }
     setApplying(true);
     setStatus(null);
+    setInstructions(null);
     try {
       const r = await helper.applyFullPageHTML({ pbipPath, html });
-      const parts: string[] = [];
-      if (r.reportJsonPath) parts.push(`✓ report.json (${r.reportJsonPath})`);
-      if (r.standalonePath) parts.push(`✓ standalone HTML (${r.standalonePath})`);
-      if (r.error) parts.push(`⚠ ${r.error}`);
-      const msg = parts.join(" · ") + (r.hint ? ` — ${r.hint}` : "");
-      setStatus({
-        kind: r.error && !r.reportJsonPath ? "warn" : "ok",
-        text: msg || "Eingebettet.",
-      });
+      if (r.measurePath) {
+        const head = r.replaced
+          ? `↻ Measure '${r.measureName}' auf Tabelle '${r.table}' aktualisiert`
+          : `✓ Measure '${r.measureName}' auf Tabelle '${r.table}' angelegt`;
+        setStatus({ kind: "ok", text: head });
+        setInstructions(r.userInstructions ?? null);
+      } else if (r.error) {
+        setStatus({ kind: "err", text: `⚠ ${r.error}` });
+      } else {
+        setStatus({ kind: "warn", text: "Embed-Antwort ohne Measure-Pfad." });
+      }
     } catch (e) {
       setStatus({ kind: "err", text: (e as Error).message });
     } finally {
@@ -185,6 +190,36 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
           }}
         >
           {status.text}
+        </div>
+      )}
+
+      {instructions && instructions.length > 0 && (
+        <div
+          style={{
+            padding: "12px 20px",
+            background: "var(--panel-2)",
+            borderBottom: "1px solid var(--border)",
+            fontSize: 12,
+            color: "var(--text)",
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>So bekommst du das HTML in den Bericht:</div>
+          <ol style={{ paddingLeft: 18, margin: 0, lineHeight: 1.6 }}>
+            {instructions.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+          <div style={{ marginTop: 8, color: "var(--muted)" }}>
+            Visual:{" "}
+            <a
+              href="https://html-content.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "var(--accent)" }}
+            >
+              html-content.com
+            </a>
+          </div>
         </div>
       )}
 

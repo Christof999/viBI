@@ -83,15 +83,21 @@ export default function App() {
       `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
       (state.phase === "design"
         ? `DESIGN-PHASE-FOKUS:\n` +
-          `Du bist NICHT mehr in der Modellierung. KEINE add_measure / add_relationship / add_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
-          `Stattdessen: das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das page-filling als HTML-Visual eingebettet wird. Es lebt im Helper als .vibi-design.html.\n\n` +
+          `Du bist NICHT mehr in der Modellierung. KEINE add_relationship / add_calculated_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
+          `Das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das in Power BI über das 'HTML Content'-Custom-Visual von https://html-content.com gerendert wird. Es lebt im Helper als .vibi-design.html.\n\n` +
+          `EMBEDDING-MECHANISMUS (sehr wichtig zu verstehen): Power BI rendert das HTML NICHT direkt aus report.json. Stattdessen:\n` +
+          `  • Das HTML wird als DAX-Stringliteral in eine Measure namens 'Dashboard HTML' (Tabelle 'Date', Anzeige-Ordner '_viBI') geschrieben.\n` +
+          `  • Der User installiert das 'HTML Content'-Visual einmalig aus AppSource.\n` +
+          `  • Der User zieht die Measure 'Dashboard HTML' auf das 'Value' / 'Wert'-Feld des Visuals.\n` +
+          `  • Das Visual rendert dann den Measure-Wert als HTML.\n` +
+          `Das Tool embed_full_page_html schreibt diese Measure (mit replace=true, also Idempotent). Standalone-HTML-Datei wird parallel als Backup abgelegt.\n\n` +
           `Workflow für JEDE Design-Anpassung:\n` +
           `1. ZUERST get_full_page_html({pbipPath}) aufrufen – das ist der aktuelle Stand. NIEMALS aus dem Gedächtnis HTML neu generieren – die existierende Vorlage hat schon Header, KPI-Karten, Bar-Chart, Top-Tabelle, Footer mit CI-Farben.\n` +
           `2. DAS BESTEHENDE HTML als Basis nehmen, gezielt modifizieren (User-Wunsch umsetzen, alles andere lassen).\n` +
           `3. update_full_page_html({pbipPath, html: <das komplette neue Dokument>}) – die Live-Preview im DesignPanel aktualisiert sich automatisch.\n` +
-          `4. Erst wenn der User explizit „in den Bericht einbetten" sagt: embed_full_page_html aufrufen.\n` +
+          `4. Erst wenn der User explizit „in den Bericht einbetten" / „in PBI" sagt: embed_full_page_html aufrufen. Erkläre dem User in der Antwort die 4 Schritte zum Visual-Setup (Reload PBI, Visual installieren, Visual platzieren, Measure binden).\n` +
           `5. Antworte dem User KURZ in Bullets: was hast du geändert, wie sieht es aus.\n\n` +
-          `WICHTIG: Niemals halben Schnipsel zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe. Das Visual läuft im sandboxed iframe ohne Netz.\n\n`
+          `WICHTIG: Niemals halbe Snippets zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe – das Visual läuft im sandboxed iframe ohne Netz. Das HTML wird DAX-string-escaped (Quotes verdoppelt), Newlines werden zu Spaces kollabiert – bau das HTML so dass das ohne Schaden ist.\n\n`
         : "") +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +

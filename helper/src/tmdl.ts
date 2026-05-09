@@ -255,6 +255,36 @@ function tmdlIdent(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
+// Entfernt ein Measure aus seiner TMDL-Datei. Nützlich für upsert-Flows.
+export function removeMeasure(
+  pbipPath: string,
+  tableName: string,
+  measureName: string
+): { ok: boolean; path: string } {
+  const file = findTableFile(pbipPath, tableName);
+  if (!file) return { ok: false, path: pbipPath };
+  // Match „measure 'Name' = …" plus alle eingerückten Folge-Properties bis
+  // zur nächsten geschwister-level (column/measure/partition/annotation).
+  const escapedName = escapeRegex(measureName);
+  const re = new RegExp(
+    `(?:^|\\n)\\s*measure\\s+(?:'${escapedName}'|${escapedName})\\b[\\s\\S]*?(?=\\n\\t(?:column|measure|partition|hierarchy|annotation)\\b|\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
+    "g"
+  );
+  if (!re.test(file.content)) return { ok: false, path: file.filePath };
+  const cleaned = file.content.replace(re, "\n");
+  return { ok: true, path: backupAndWrite(file.filePath, cleaned) };
+}
+
+// Wandelt eine HTML-Datei in einen DAX-String-Literal um (Quotes verdoppelt,
+// Newlines auf Leerzeichen kollabiert, damit das Single-Line-DAX bleibt – DAX
+// erlaubt zwar mehrzeilige Strings, aber die TMDL-Parser-Regeln sind dort
+// pingelig). Für HTML egal: Whitespace zwischen Tags ist semantikfrei.
+export function htmlToDaxLiteral(html: string): string {
+  const collapsed = html.replace(/\r/g, "").replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim();
+  const escaped = collapsed.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
+
 export function addMeasure(
   pbipPath: string,
   args: {
@@ -263,8 +293,19 @@ export function addMeasure(
     expression: string;
     formatString?: string;
     displayFolder?: string;
+    replace?: boolean;
   }
-): { ok: true; path: string } {
+): { ok: true; path: string; replaced?: boolean } {
+  let replaced = false;
+  if (args.replace) {
+    // Wenn schon ein Measure mit dem Namen existiert, vorher entfernen.
+    try {
+      const r = removeMeasure(pbipPath, args.table, args.name);
+      if (r.ok) replaced = true;
+    } catch {
+      /* tolerate */
+    }
+  }
   const file = findTableFile(pbipPath, args.table);
   if (!file) {
     let availableTables = "(unbekannt)";
@@ -310,7 +351,11 @@ export function addMeasure(
     ];
   }
   lines.splice(insertAt, 0, ...insert);
-  return { ok: true, path: backupAndWrite(file.filePath, joinBlock(lines)) };
+  return {
+    ok: true,
+    path: backupAndWrite(file.filePath, joinBlock(lines)),
+    ...(replaced ? { replaced: true } : {}),
+  };
 }
 
 export function addRelationship(

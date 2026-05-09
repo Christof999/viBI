@@ -13,6 +13,7 @@ import {
   addMeasure,
   addRelationship,
   fixAmbiguousRelationships,
+  htmlToDaxLiteral,
   listModel,
   removeRelationship,
   restoreTmdlBackups,
@@ -416,12 +417,14 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "embed_full_page_html",
     description:
-      "Nimmt das aktuell gespeicherte Design-HTML (aus get_full_page_html) und schreibt es in die report.json des PBIP, plus eine standalone vibi-design.html in StaticResources. Aufrufen, sobald der User mit dem Design zufrieden ist. Optional kann html direkt mitgegeben werden – sonst wird der gespeicherte Stand verwendet.",
+      "Bettet das aktuell gespeicherte Design-HTML als DAX-Measure in den PBIP-Bericht ein. Das ist der RICHTIGE Power-BI-Weg: HTML kommt als Stringliteral in eine Measure, die der User im 'HTML Content'-Custom-Visual als Value bindet. Schreibt die Measure 'Dashboard HTML' auf die Date-Tabelle (oder die übergebene table). Schreibt zusätzlich eine standalone vibi-design.html in StaticResources.",
     inputSchema: {
       type: "object",
       properties: {
         pbipPath: { type: "string" },
         html: { type: "string", description: "Optional. Default = der per update_full_page_html gespeicherte Stand." },
+        table: { type: "string", description: "Tabelle für die Measure. Default 'Date'." },
+        measureName: { type: "string", description: "Name der Measure. Default 'Dashboard HTML'." },
       },
     },
     async handler(args) {
@@ -433,27 +436,54 @@ export const builtInTools: BuiltInTool[] = [
           "Kein HTML übergeben und keins gespeichert. Erst update_full_page_html aufrufen oder html-Parameter übergeben."
         );
       }
-      let reportJsonPath: string | null = null;
-      let embedError: string | null = null;
+      const table = str(args.table) ?? "Date";
+      const measureName = str(args.measureName) ?? "Dashboard HTML";
+      const dax = htmlToDaxLiteral(html);
+
+      let measurePath: string | null = null;
+      let measureError: string | null = null;
+      let replaced = false;
       try {
-        reportJsonPath = applyFullPageHTML(path, html);
+        const r = addMeasure(path, {
+          table,
+          name: measureName,
+          expression: dax,
+          displayFolder: "_viBI",
+          replace: true,
+        });
+        measurePath = r.path;
+        replaced = !!r.replaced;
       } catch (e) {
-        embedError = (e as Error).message;
+        measureError = (e as Error).message;
       }
+
       const standalonePath = writeStandaloneHtml(path, html);
-      // Persistieren, damit sich Frontend und KI weiter synchron sehen
+      // HTML auch im persistenten Design-State sichern, damit das Frontend
+      // sich synchron hält
       setDesignHtml(path, html);
+
+      const charCount = html.length.toLocaleString("de-DE");
+      const summary = measurePath
+        ? `${replaced ? "↻" : "✓"} Measure '${measureName}' auf Tabelle '${table}' gesetzt (${charCount} Zeichen HTML als DAX-String). Standalone-HTML zusätzlich unter ${standalonePath} abgelegt.`
+        : `⚠ Measure-Schreibvorgang fehlgeschlagen (${measureError}). HTML aber als ${standalonePath} gesichert.`;
+
       return {
-        ok: !!(reportJsonPath || standalonePath),
-        reportJsonPath,
+        ok: !!measurePath,
+        measurePath,
+        measureName,
+        table,
+        replaced,
         standalonePath,
-        embedError,
-        summary: reportJsonPath
-          ? `✓ HTML in report.json eingebettet (${reportJsonPath}) und parallel als ${standalonePath} abgelegt.`
-          : `⚠ Einbettung in report.json fehlgeschlagen (${embedError}). HTML aber als ${standalonePath} gesichert – im PBI Desktop manuell ein 'HTML Content' Visual einfügen und Inhalt einkopieren.`,
-        reloadHint: reportJsonPath
-          ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen, damit das HTML-Visual erscheint."
-          : undefined,
+        embedError: measureError,
+        summary,
+        userInstructions: [
+          "1. Power BI Desktop schließen ohne Speichern und erneut öffnen, damit die Measure geladen wird.",
+          "2. Falls noch nicht da: 'HTML Content'-Custom-Visual von https://html-content.com in PBI Desktop installieren (Visualisierungen → '...' → 'Visual aus Datei abrufen' oder direkt aus AppSource).",
+          "3. Auf der Berichtsseite das HTML-Content-Visual einfügen (oder vorhandenes auswählen) und über die ganze Seite ziehen.",
+          `4. Im Felder-Bereich: Measure '${measureName}' aus der Tabelle '${table}' (Ordner '_viBI') auf das Feld 'Values' / 'Wert' des HTML-Visuals ziehen.`,
+          "5. Das HTML-Visual rendert nun das page-fillende Dashboard. Bei jedem update_full_page_html → embed_full_page_html aktualisiert sich das Visual automatisch.",
+        ],
+        reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
       };
     },
   },
