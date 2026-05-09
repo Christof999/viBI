@@ -294,6 +294,16 @@ export function removeMeasure(
     if (line.trim() === "") continue;
     const lineIndent = line.match(/^\s*/)![0].length;
     if (lineIndent > measureIndent) continue;
+    // Wir sind auf Sibling-/Top-Level zurück. ABER: wenn das nächste
+    // Geschwister SELBER ein measure mit demselben Namen ist (Duplikat),
+    // im Skip-Modus bleiben und auch das überspringen.
+    const dupHeader = line.match(headerRe);
+    if (dupHeader) {
+      measureIndent = dupHeader[1].length;
+      removed++;
+      // skipping bleibt true
+      continue;
+    }
     skipping = false;
     out.push(line);
   }
