@@ -85,12 +85,12 @@ export default function App() {
         ? `DESIGN-PHASE-FOKUS:\n` +
           `Du bist NICHT mehr in der Modellierung. KEINE add_relationship / add_calculated_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
           `Das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das in Power BI über das 'HTML Content'-Custom-Visual von https://html-content.com gerendert wird. Es lebt im Helper als .vibi-design.html.\n\n` +
-          `EMBEDDING-MECHANISMUS (sehr wichtig zu verstehen): Power BI rendert das HTML NICHT direkt aus report.json. Stattdessen:\n` +
-          `  • Das HTML wird als DAX-Stringliteral in eine Measure namens 'Dashboard HTML' (Tabelle 'Date', Anzeige-Ordner '_viBI') geschrieben.\n` +
-          `  • Der User installiert das 'HTML Content'-Visual einmalig aus AppSource.\n` +
-          `  • Der User zieht die Measure 'Dashboard HTML' auf das 'Value' / 'Wert'-Feld des Visuals.\n` +
-          `  • Das Visual rendert dann den Measure-Wert als HTML.\n` +
-          `Das Tool embed_full_page_html schreibt diese Measure (mit replace=true, also Idempotent). Standalone-HTML-Datei wird parallel als Backup abgelegt.\n\n` +
+          `EMBEDDING-MECHANISMUS (sehr wichtig zu verstehen):\n` +
+          `embed_full_page_html macht beim Aufruf DREI Dinge gleichzeitig:\n` +
+          `  • Schreibt das HTML als DAX-Stringliteral in eine Measure 'Dashboard HTML' (Tabelle 'Date', Anzeige-Ordner '_viBI'). Idempotent (replace=true).\n` +
+          `  • PLATZIERT auf Seite 1 ein page-fillendes 'HTML Content'-Visual (von https://html-content.com) und bindet die Measure ans 'Values'-Feld. Der User muss NICHT mehr selbst Visual + Bindung machen.\n` +
+          `  • Sichert eine standalone vibi-design.html in StaticResources als Backup.\n` +
+          `Einzige verbleibende User-Aktion: einmalig die Erweiterung von https://html-content.com installieren, falls PBI Desktop 'Visual fehlt' anzeigt – Bindung und Position bleiben dabei erhalten.\n\n` +
           `Workflow für JEDE Design-Anpassung:\n` +
           `1. ZUERST get_full_page_html({pbipPath}) aufrufen – das ist der aktuelle Stand. NIEMALS aus dem Gedächtnis HTML neu generieren – die existierende Vorlage hat schon Header, KPI-Karten, Bar-Chart, Top-Tabelle, Footer mit CI-Farben.\n` +
           `2. DAS BESTEHENDE HTML als Basis nehmen, gezielt modifizieren (User-Wunsch umsetzen, alles andere lassen).\n` +

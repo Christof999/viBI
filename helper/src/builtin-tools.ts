@@ -173,7 +173,7 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "apply_full_page_html",
     description:
-      "Schreibt ein vollständiges HTML-Dokument als ein einziges page-fillendes HTML-Visual in die report.json des PBIP-Berichts. Verwende dies, um vom User gewünschte HTML-Anpassungen direkt in den Bericht einzubetten.",
+      "ALIAS für embed_full_page_html. Bevorzugt embed_full_page_html aufrufen – dieses Tool nimmt das HTML, schreibt eine 'Dashboard HTML'-Measure auf die Date-Tabelle und platziert das HTML-Content-Visual page-fillend auf Seite 1 mit Measure-Binding.",
     inputSchema: {
       type: "object",
       required: ["pbipPath", "html"],
@@ -190,8 +190,35 @@ export const builtInTools: BuiltInTool[] = [
       const html = str(args.html);
       if (!path || !html) throw new Error("pbipPath und html erforderlich");
       if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
-      const out = applyFullPageHTML(path, html);
-      return { ok: true, path: out };
+      const dax = htmlToDaxLiteral(html);
+      const r = addMeasure(path, {
+        table: "Date",
+        name: "Dashboard HTML",
+        expression: dax,
+        displayFolder: "_viBI",
+        replace: true,
+      });
+      let reportJsonPath: string | null = null;
+      try {
+        reportJsonPath = applyFullPageHTML(path, html, {
+          measureTable: "Date",
+          measureName: "Dashboard HTML",
+        });
+      } catch {
+        /* non-critical */
+      }
+      const standalone = writeStandaloneHtml(path, html);
+      setDesignHtml(path, html);
+      return {
+        ok: true,
+        measurePath: r.path,
+        measureName: "Dashboard HTML",
+        table: "Date",
+        replaced: !!r.replaced,
+        reportJsonPath,
+        standalonePath: standalone,
+        summary: `${r.replaced ? "↻" : "✓"} Measure 'Dashboard HTML' geschrieben${reportJsonPath ? " · Visual auf Seite 1 platziert" : ""}.`,
+      };
     },
   },
   {
@@ -457,14 +484,28 @@ export const builtInTools: BuiltInTool[] = [
         measureError = (e as Error).message;
       }
 
+      // Visual auf Page1 platzieren mit Binding an die Measure
+      let reportJsonPath: string | null = null;
+      let visualPlaced = false;
+      try {
+        reportJsonPath = applyFullPageHTML(path, html, {
+          measureTable: table,
+          measureName,
+        });
+        visualPlaced = !!reportJsonPath;
+      } catch {
+        /* non-critical */
+      }
+
       const standalonePath = writeStandaloneHtml(path, html);
-      // HTML auch im persistenten Design-State sichern, damit das Frontend
-      // sich synchron hält
       setDesignHtml(path, html);
 
       const charCount = html.length.toLocaleString("de-DE");
+      const visualNote = visualPlaced
+        ? " Visual auf Seite 1 platziert (HTML-Content-Visual mit Measure-Binding)."
+        : "";
       const summary = measurePath
-        ? `${replaced ? "↻" : "✓"} Measure '${measureName}' auf Tabelle '${table}' gesetzt (${charCount} Zeichen HTML als DAX-String). Standalone-HTML zusätzlich unter ${standalonePath} abgelegt.`
+        ? `${replaced ? "↻" : "✓"} Measure '${measureName}' auf Tabelle '${table}' gesetzt (${charCount} Zeichen HTML als DAX-String).${visualNote}`
         : `⚠ Measure-Schreibvorgang fehlgeschlagen (${measureError}). HTML aber als ${standalonePath} gesichert.`;
 
       return {
@@ -473,15 +514,19 @@ export const builtInTools: BuiltInTool[] = [
         measureName,
         table,
         replaced,
+        reportJsonPath,
         standalonePath,
+        visualPlaced,
         embedError: measureError,
         summary,
         userInstructions: [
-          "1. Power BI Desktop schließen ohne Speichern und erneut öffnen, damit die Measure geladen wird.",
-          "2. Falls noch nicht da: 'HTML Content'-Custom-Visual von https://html-content.com in PBI Desktop installieren (Visualisierungen → '...' → 'Visual aus Datei abrufen' oder direkt aus AppSource).",
-          "3. Auf der Berichtsseite das HTML-Content-Visual einfügen (oder vorhandenes auswählen) und über die ganze Seite ziehen.",
-          `4. Im Felder-Bereich: Measure '${measureName}' aus der Tabelle '${table}' (Ordner '_viBI') auf das Feld 'Values' / 'Wert' des HTML-Visuals ziehen.`,
-          "5. Das HTML-Visual rendert nun das page-fillende Dashboard. Bei jedem update_full_page_html → embed_full_page_html aktualisiert sich das Visual automatisch.",
+          "1. PBI Desktop schließen (ohne Speichern!) und erneut öffnen.",
+          visualPlaced
+            ? "2. Auf Seite 1 ist das page-fillende 'HTML Content'-Visual bereits platziert und an die Measure gebunden. Falls PBI Desktop 'Visual fehlt' anzeigt: einmalig die Erweiterung von https://html-content.com installieren – das Visual wird automatisch ersetzt, Bindung bleibt."
+            : "2. 'HTML Content'-Visual von https://html-content.com installieren und auf der Seite einfügen.",
+          visualPlaced
+            ? "3. Wiederholtes embed_full_page_html aktualisiert nur die Measure – Visual und Position bleiben."
+            : `3. Measure '${measureName}' (Tabelle '${table}', Anzeige-Ordner '_viBI') als 'Value' des HTML-Visuals binden.`,
         ],
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
       };

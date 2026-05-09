@@ -100,10 +100,13 @@ export function DesignPanel({ project, pbipPath, html, onChange }: Props) {
     try {
       const r = await helper.applyFullPageHTML({ pbipPath, html });
       if (r.measurePath) {
-        const head = r.replaced
+        const measureBit = r.replaced
           ? `↻ Measure '${r.measureName}' auf Tabelle '${r.table}' aktualisiert`
           : `✓ Measure '${r.measureName}' auf Tabelle '${r.table}' angelegt`;
-        setStatus({ kind: "ok", text: head });
+        const visualBit = r.visualPlaced
+          ? "· Visual auf Seite 1 platziert (HTML Content, Measure gebunden)"
+          : "";
+        setStatus({ kind: "ok", text: `${measureBit} ${visualBit}`.trim() });
         setInstructions(r.userInstructions ?? null);
       } else if (r.error) {
         setStatus({ kind: "err", text: `⚠ ${r.error}` });

@@ -145,45 +145,91 @@ function defaultDateTableTmdl(): string {
 const PAGE_WIDTH = 1280;
 const PAGE_HEIGHT = 720;
 
+// VisualType-Identifier des "HTML Content" Custom Visuals von html-content.com
+// (Daniel Marsh-Patrick). Falls der User eine andere HTML-Visual-Variante
+// installiert hat, kann er das per HTML_VISUAL_TYPE Env-Var überschreiben.
+const HTML_VISUAL_TYPE = process.env.HTML_VISUAL_TYPE ?? "HTMLContent451CCA94144C49ECB7BCDC4E5E7E1A4D";
+
+// Erzeugt einen page-fillenden Visual-Container für das HTML-Content-Visual,
+// dessen "Values"-Feld an das angegebene Measure gebunden wird.
+//
+// Die report.json-Form ist Legacy-PBIX-kompatibel. PBI Desktop konvertiert das
+// beim Speichern ggf. ins sharded Format, behält aber Position + Bindings bei.
+export function buildHtmlContentVisualContainer(args: {
+  measureTable: string;
+  measureName: string;
+  visualType?: string;
+}) {
+  const visualType = args.visualType ?? HTML_VISUAL_TYPE;
+  const tableAlias = args.measureTable.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 4) || "t";
+  const queryName = `${args.measureTable}.${args.measureName}`;
+  // PBI-Query, die genau die Measure als einzigen Datenpunkt selektiert.
+  const prototypeQuery = {
+    Version: 2,
+    From: [{ Name: tableAlias, Entity: args.measureTable, Type: 0 }],
+    Select: [
+      {
+        Measure: {
+          Expression: { SourceRef: { Source: tableAlias } },
+          Property: args.measureName,
+        },
+        Name: queryName,
+      },
+    ],
+  };
+  return {
+    x: 0,
+    y: 0,
+    z: 0,
+    width: PAGE_WIDTH,
+    height: PAGE_HEIGHT,
+    config: JSON.stringify({
+      name: "vibiHtmlContent",
+      layouts: [
+        { id: 0, position: { x: 0, y: 0, z: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT } },
+      ],
+      singleVisual: {
+        visualType,
+        projections: {
+          Values: [{ queryRef: queryName, active: true }],
+        },
+        prototypeQuery,
+        drillFilterOtherVisuals: true,
+        objects: {},
+      },
+    }),
+    filters: "[]",
+    query: JSON.stringify({
+      Commands: [{ SemanticQueryDataShapeCommand: { Query: prototypeQuery, Binding: { Primary: { Groupings: [{ Projections: [0] }] }, DataReduction: { DataVolume: 4, Primary: { Top: {} } }, Version: 1 } } }],
+    }),
+    dataTransforms: JSON.stringify({
+      objects: {},
+      projectionOrdering: { Values: [0] },
+      queryMetadata: {
+        Select: [{ Restatement: queryName, Name: queryName, Type: 1 }],
+      },
+      visualElements: [{ DataRoles: [{ Name: "Values", Projection: 0, isActive: true }] }],
+      selects: [{ displayName: queryName, queryName, type: { underlyingType: 1, category: null } }],
+    }),
+  };
+}
+
 function buildReportJson(opts: {
   withHtmlPlaceholder?: boolean;
   htmlContent?: string;
+  measureTable?: string;
+  measureName?: string;
 }) {
-  const html =
-    opts.htmlContent ??
-    (opts.withHtmlPlaceholder
-      ? '<div style="padding:24px;font-family:Segoe UI,system-ui,sans-serif">Bericht wird in viBI gestaltet.</div>'
-      : "");
-  // Single full-page HTML visual covering the entire canvas.
-  // Uses the public "HTML Content" custom visual (CWVHTMLVIEWER1709477497034).
-  const visualContainers = html
-    ? [
-        {
-          x: 0,
-          y: 0,
-          z: 0,
-          width: PAGE_WIDTH,
-          height: PAGE_HEIGHT,
-          config: JSON.stringify({
-            name: "vibiFullPage",
-            layouts: [{ id: 0, position: { x: 0, y: 0, z: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT } }],
-            singleVisual: {
-              visualType: "CWVHTMLVIEWER1709477497034",
-              objects: {
-                contentFormatting: [
-                  {
-                    properties: {
-                      htmlContent: { expr: { Literal: { Value: JSON.stringify(html) } } },
-                    },
-                  },
-                ],
-              },
-              drillFilterOtherVisuals: true,
-            },
-          }),
-        },
-      ]
-    : [];
+  // Page-fillendes "HTML Content"-Visual von html-content.com mit der
+  // Dashboard-HTML-Measure als Value-Binding. Wenn kein Measure-Name übergeben
+  // wurde, wird der Bereich leer gelassen – nur das nackte Visual fürs initiale
+  // PBIP. embed_full_page_html ruft buildReportJson später mit measureName auf.
+  const measureTable = opts.measureTable;
+  const measureName = opts.measureName;
+  const visualContainers =
+    measureTable && measureName
+      ? [buildHtmlContentVisualContainer({ measureTable, measureName })]
+      : [];
 
   return {
     config: '{"version":"5.43","themeCollection":{"customTheme":{"name":"viBI"}}}',
@@ -300,8 +346,15 @@ export function writePBIP(projectDir: string, project: Project): string {
   return join(projectDir, `${name}.pbip`);
 }
 
-export function applyFullPageHTML(pbipPath: string, html: string): string {
-  // pbipPath = .../Project/Project.pbip
+// Schreibt die report.json so, dass auf der ersten Seite das HTML-Content-
+// Visual page-fillend platziert ist und dessen "Values"-Feld an die Measure
+// gebunden ist (Default: 'Date'.'Dashboard HTML'). HTML selbst lebt in der
+// Measure (per addMeasure), das Visual rendert es.
+export function applyFullPageHTML(
+  pbipPath: string,
+  _html: string,
+  opts?: { measureTable?: string; measureName?: string; visualType?: string }
+): string {
   const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
   const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
   const reportJsonPath = join(projectDir, `${projName}.Report`, "report.json");
@@ -310,7 +363,14 @@ export function applyFullPageHTML(pbipPath: string, html: string): string {
   }
   writeFileSync(
     reportJsonPath,
-    JSON.stringify(buildReportJson({ htmlContent: html }), null, 2)
+    JSON.stringify(
+      buildReportJson({
+        measureTable: opts?.measureTable ?? "Date",
+        measureName: opts?.measureName ?? "Dashboard HTML",
+      }),
+      null,
+      2
+    )
   );
   return reportJsonPath;
 }

@@ -148,6 +148,7 @@ export const helper = {
     replaced?: boolean;
     reportJsonPath?: string | null;
     standalonePath?: string | null;
+    visualPlaced?: boolean;
     error?: string | null;
     userInstructions?: string[];
   }> {

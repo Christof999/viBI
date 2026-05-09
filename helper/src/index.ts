@@ -207,13 +207,20 @@ app.post("/report/apply-html", (req, res) => {
       measureError = (e as Error).message;
     }
 
-    // Optional: legacy report.json embed weiterhin als best-effort, falls in
-    // älteren Power-BI-Desktops verwendet
+    // Visual-Instanz auf Page1 platzieren mit Measure-Binding.
+    // Wenn das HTML-Content-Visual installiert ist (oder beim ersten Öffnen
+    // installiert wird), zeigt PBI das page-fillende Dashboard direkt an.
     let reportJsonPath: string | null = null;
+    let visualPlaced = false;
     try {
-      reportJsonPath = applyFullPageHTML(pbipPath, html);
-    } catch {
-      /* non-critical */
+      reportJsonPath = applyFullPageHTML(pbipPath, html, {
+        measureTable: targetTable,
+        measureName: targetMeasure,
+      });
+      visualPlaced = !!reportJsonPath;
+    } catch (e) {
+      // Visual-Schreiben optional – Measure ist der wichtigere Teil
+      void e;
     }
 
     setDesignHtml(pbipPath, html);
@@ -233,12 +240,16 @@ app.post("/report/apply-html", (req, res) => {
       reportJsonPath,
       standalonePath,
       error: measureError,
+      visualPlaced,
       userInstructions: measurePath
         ? [
-            "PBI Desktop schließen (ohne Speichern!) und erneut öffnen, damit die Measure geladen wird.",
-            "'HTML Content'-Custom-Visual von https://html-content.com installieren, falls noch nicht da (Visualisierungen → '...' → AppSource).",
-            "Visual auf der Seite einfügen und über die ganze Fläche ziehen.",
-            `Measure '${targetMeasure}' (Tabelle '${targetTable}', Anzeige-Ordner '_viBI') als 'Value' / 'Wert' des HTML-Visuals binden.`,
+            "PBI Desktop schließen (ohne Speichern!) und erneut öffnen, damit Measure und Visual geladen werden.",
+            visualPlaced
+              ? `Auf der ersten Seite ist bereits ein page-fillendes 'HTML Content'-Visual platziert (Measure '${targetMeasure}' an 'Value' gebunden). Falls das Visual als 'fehlend' angezeigt wird, einmalig die Erweiterung von https://html-content.com installieren – das Visual wird dann automatisch ersetzt.`
+              : "'HTML Content'-Visual manuell auf der Seite einfügen und über die ganze Fläche ziehen.",
+            visualPlaced
+              ? "Bei jedem späteren 'In Bericht einbetten' wird die Measure idempotent aktualisiert – Visual und Bindung bleiben."
+              : `Measure '${targetMeasure}' (Tabelle '${targetTable}', Anzeige-Ordner '_viBI') als 'Value' des HTML-Visuals binden.`,
           ]
         : [],
     });
