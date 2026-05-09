@@ -15,6 +15,7 @@ import {
   fixAmbiguousRelationships,
   listModel,
   removeRelationship,
+  restoreTmdlBackups,
 } from "./tmdl.js";
 import { looksLikeViBIPlaceholder, readLiveModel } from "./live-model.js";
 import { bestPbipFor, findRecentPbips } from "./pbip-discovery.js";
@@ -218,14 +219,32 @@ export const builtInTools: BuiltInTool[] = [
         };
       }
       const tmdl = listModel(path);
-      const placeholder = looksLikeViBIPlaceholder(tmdl.tables);
+      // AI-Sicht: Auto-Date-System-Tabellen (LocalDateTable_*, DateTableTemplate_*)
+      // ausblenden, sonst plant die KI Beziehungen zu Phantom-Tabellen. Intern
+      // bleiben sie für orphan-Erkennung sichtbar.
+      const userTables = tmdl.tables.filter(
+        (t) =>
+          !t.name.startsWith("LocalDateTable") &&
+          !t.name.startsWith("DateTableTemplate")
+      );
+      const userRels = tmdl.relationships.filter(
+        (r) =>
+          !r.fromTable.startsWith("LocalDateTable") &&
+          !r.toTable.startsWith("LocalDateTable") &&
+          !r.fromTable.startsWith("DateTableTemplate") &&
+          !r.toTable.startsWith("DateTableTemplate")
+      );
+      const placeholder = looksLikeViBIPlaceholder(userTables);
       return {
-        ...tmdl,
+        pbipPath: tmdl.pbipPath,
+        layout: tmdl.layout,
         source: "tmdl",
+        tables: userTables,
+        relationships: userRels,
         ...(placeholder
           ? {
               placeholderWarning:
-                "Diese TMDL enthält nur den viBI-Platzhalter. Stoppe sofort und sage dem User, dass er den .pbip in Power BI Desktop öffnen, Tabellen laden UND speichern (Strg+S) muss. Erfinde KEINE Modellstruktur.",
+                "Diese TMDL enthält nur die viBI-Initial-Datumstabelle. Sage dem User, dass er den .pbip in Power BI Desktop öffnen, Faktentabellen importieren UND speichern (Strg+S) muss. Erfinde KEINE Modellstruktur.",
             }
           : {}),
       };
@@ -337,6 +356,32 @@ export const builtInTools: BuiltInTool[] = [
         ...r,
         summary,
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
+    },
+  },
+  {
+    name: "restore_tmdl_backup",
+    description:
+      "Stellt im PBIP-Bericht alle TMDL-Dateien aus ihren .tmdl.bak-Backups wieder her. Nutze dies, wenn ein viBI-Tool das Modell beschädigt hat (z.B. PBI Desktop wirft Variation-/Relationship-Fehler beim Öffnen). Der bisherige Stand wird als .tmdl.before-restore weggesichert, falls man doch noch zurück will.",
+    inputSchema: {
+      type: "object",
+      properties: { pbipPath: { type: "string" } },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+      const r = restoreTmdlBackups(path);
+      return {
+        ...r,
+        summary:
+          r.restoredCount === 0
+            ? "Keine .tmdl.bak-Dateien gefunden – nichts zum Wiederherstellen."
+            : `↩ ${r.restoredCount} TMDL-Datei(en) aus .bak wiederhergestellt`,
+        reloadHint:
+          r.restoredCount > 0
+            ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen – das Modell sollte wieder funktionieren."
+            : undefined,
       };
     },
   },

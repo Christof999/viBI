@@ -8,7 +8,7 @@
 // Erzeugt für jede Mutation einen .tmdl.bak-Snapshot, damit nichts unwiderruflich
 // kaputtgeht.
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { concatenatedTmdl, discoverModel } from "./tmdl-discovery.js";
@@ -113,6 +113,15 @@ export function listModel(pbipPath: string): {
     return { pbipPath, layout: d.layout, tables: [], relationships: [] };
   }
 
+  // WICHTIG: hier werden ALLE Tabellen geparst, auch LocalDateTable_*
+  // und DateTableTemplate_* (die Auto-Date-Tabellen, die PBI Desktop
+  // selber pro dateTime-Spalte anlegt). Wenn wir die ausfiltern würden,
+  // markiert fix_ambiguous_relationships die Auto-Date-Beziehungen als
+  // „orphaned" und entfernt sie – dann zeigen die Variation-Properties
+  // auf den dateTime-Spalten ins Leere und PBI öffnet das Projekt nicht
+  // mehr. Filtern für die AI-User-Sicht passiert eine Schicht weiter
+  // oben in builtin-tools.ts (read_pbip_metadata).
+
   // .bim → JSON
   if (d.layout === "bim" && d.bimJson) {
     const json = d.bimJson as {
@@ -176,7 +185,8 @@ export function listModel(pbipPath: string): {
   while ((match = tableRe.exec(src))) {
     const name = match[1] ?? match[2];
     const body = match[3];
-    if (name.startsWith("DateTableTemplate") || name.startsWith("LocalDateTable")) continue;
+    // Auto-Date-Tabellen (LocalDateTable_*, DateTableTemplate_*) bleiben drin,
+    // damit fix_ambiguous_relationships sie NICHT als orphan-Quelle interpretiert.
     const cols: { name: string; dataType: string }[] = [];
     const colRe = /column\s+(?:'([^']+)'|(\S+))[\s\S]*?dataType:\s*(\w+)/g;
     let cm: RegExpExecArray | null;
@@ -441,6 +451,53 @@ export function addRelationship(
 // Geht alle Beziehungen durch und stellt sicher, dass pro Tabellenpaar
 // maximal EINE active Beziehung existiert. Mehrfach-active werden auf
 // inactive gesetzt; exakte Duplikate (gleiches Spaltenpaar) gelöscht.
+// Stellt für jede .tmdl.bak im SemanticModel-Verzeichnis den letzten
+// Vor-viBI-Stand der entsprechenden .tmdl wieder her. Der ehemalige
+// .tmdl-Inhalt wird sicherheitshalber als .tmdl.before-restore abgelegt.
+export function restoreTmdlBackups(pbipPath: string): {
+  ok: boolean;
+  restoredCount: number;
+  restored: string[];
+} {
+  const d = discoverModel(pbipPath);
+  if (d.layout === "none" || d.layout === "bim") {
+    return { ok: false, restoredCount: 0, restored: [] };
+  }
+  const restored: string[] = [];
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e);
+      let st;
+      try {
+        st = statSync(p);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) walk(p);
+      else if (e.endsWith(".tmdl.bak")) {
+        const target = p.replace(/\.tmdl\.bak$/, ".tmdl");
+        try {
+          if (existsSync(target)) {
+            copyFileSync(target, target + ".before-restore");
+          }
+          copyFileSync(p, target);
+          restored.push(target);
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  };
+  walk(d.semanticModelDir);
+  return { ok: true, restoredCount: restored.length, restored };
+}
+
 export function fixAmbiguousRelationships(pbipPath: string): {
   ok: boolean;
   path: string;
