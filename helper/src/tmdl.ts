@@ -275,13 +275,24 @@ export function removeMeasure(
   return { ok: true, path: backupAndWrite(file.filePath, cleaned) };
 }
 
-// Wandelt eine HTML-Datei in einen DAX-String-Literal um (Quotes verdoppelt,
-// Newlines auf Leerzeichen kollabiert, damit das Single-Line-DAX bleibt – DAX
-// erlaubt zwar mehrzeilige Strings, aber die TMDL-Parser-Regeln sind dort
-// pingelig). Für HTML egal: Whitespace zwischen Tags ist semantikfrei.
+// Wandelt ein HTML-Dokument in einen DAX-String-Literal um, der
+// 1) auf eine Zeile passt (TMDL-Parser pingelig bei Multi-Line ohne Fence),
+// 2) keine Zeichen enthält, die DAX/TMDL falsch interpretiert.
+//
+// Verfahren:
+//  - alle Whitespace-Sequenzen (Newline, Tab, mehrfach-Space) → einzelnes
+//    Leerzeichen kollabieren (zwischen HTML-Tags ist Whitespace semantikfrei)
+//  - Doppel-Quotes verdoppeln (DAX-String-Escape)
+//  - Control-Characters außer Tab/Newline (die schon collapsed sind) entfernen
 export function htmlToDaxLiteral(html: string): string {
-  const collapsed = html.replace(/\r/g, "").replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim();
-  const escaped = collapsed.replace(/"/g, '""');
+  const cleaned = html
+    // Control-Chars (außer \t \n \r) die manche HTML-Editoren produzieren
+    .replace(/[ --]/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const escaped = cleaned.replace(/"/g, '""');
   return `"${escaped}"`;
 }
 

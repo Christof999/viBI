@@ -146,9 +146,10 @@ const PAGE_WIDTH = 1280;
 const PAGE_HEIGHT = 720;
 
 // VisualType-Identifier des "HTML Content" Custom Visuals von html-content.com
-// (Daniel Marsh-Patrick). Falls der User eine andere HTML-Visual-Variante
-// installiert hat, kann er das per HTML_VISUAL_TYPE Env-Var überschreiben.
-const HTML_VISUAL_TYPE = process.env.HTML_VISUAL_TYPE ?? "HTMLContent451CCA94144C49ECB7BCDC4E5E7E1A4D";
+// (Daniel Marsh-Patrick, AppSource v1.6.0.0). Falls eine andere Version
+// installiert ist, kann das per HTML_VISUAL_TYPE Env-Var überschrieben werden.
+const HTML_VISUAL_TYPE =
+  process.env.HTML_VISUAL_TYPE ?? "htmlContent443BE3AD55E043BF878BED274D3A6855";
 
 // Erzeugt einen page-fillenden Visual-Container für das HTML-Content-Visual,
 // dessen "Values"-Feld an das angegebene Measure gebunden wird.

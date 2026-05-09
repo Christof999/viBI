@@ -572,10 +572,27 @@ export const builtInTools: BuiltInTool[] = [
 
       const charCount = html.length.toLocaleString("de-DE");
       const visualNote = visualPlaced
-        ? " Visual auf Seite 1 platziert (HTML-Content-Visual mit Measure-Binding)."
+        ? " Visual auf Seite 1 platziert (HTML-Content-Visual htmlContent443BE3AD55E043BF878BED274D3A6855, Measure gebunden)."
         : "";
+
+      // Verify: nochmal das Modell lesen und prüfen ob die Measure wirklich
+      // dort ist mit nicht-leerem Ausdruck. Wenn nicht, ist was schief gelaufen.
+      let verified = false;
+      let verifyError: string | null = null;
+      try {
+        const model = listModel(path);
+        const tbl = model.tables.find((t) => t.name === table);
+        const m = tbl?.measures.find((mm) => mm.name === measureName);
+        verified = !!(m && m.expression && m.expression.length > 10);
+        if (!verified) verifyError = "Measure nach Schreibvorgang nicht im Modell auffindbar";
+      } catch (e) {
+        verifyError = (e as Error).message;
+      }
+
       const summary = measurePath
-        ? `${replaced ? "↻" : "✓"} Measure '${measureName}' auf Tabelle '${table}' gesetzt (${charCount} Zeichen HTML als DAX-String).${visualNote}`
+        ? `${replaced ? "↻" : "✓"} Measure '${measureName}' auf Tabelle '${table}' gesetzt (${charCount} Zeichen HTML als DAX-String).${visualNote}${
+            verified ? " Verify ✓" : ` ⚠ Verify fehlgeschlagen: ${verifyError ?? "unbekannt"}`
+          }`
         : `⚠ Measure-Schreibvorgang fehlgeschlagen (${measureError}). HTML aber als ${standalonePath} gesichert.`;
 
       return {
