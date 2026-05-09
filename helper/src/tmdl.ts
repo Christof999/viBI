@@ -255,24 +255,73 @@ function tmdlIdent(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-// Entfernt ein Measure aus seiner TMDL-Datei. Nützlich für upsert-Flows.
+// Entfernt ALLE Measures mit dem gegebenen Namen aus einer Tabellen-TMDL-Datei.
+// Line-by-line statt Regex, weil Regex über mehrzeilige Blöcke mit langen
+// String-Literalen unzuverlässig ist (Issue: vorherige Implementierung hat
+// Duplikate stehen lassen → PBI-Fehler "TMDL-Objekte können nicht
+// zusammengeführt werden, weil beide die gleiche Eigenschaft expression
+// deklarieren").
 export function removeMeasure(
   pbipPath: string,
   tableName: string,
   measureName: string
-): { ok: boolean; path: string } {
+): { ok: boolean; path: string; removedCount: number } {
   const file = findTableFile(pbipPath, tableName);
-  if (!file) return { ok: false, path: pbipPath };
-  // Match „measure 'Name' = …" plus alle eingerückten Folge-Properties bis
-  // zur nächsten geschwister-level (column/measure/partition/annotation).
-  const escapedName = escapeRegex(measureName);
-  const re = new RegExp(
-    `(?:^|\\n)\\s*measure\\s+(?:'${escapedName}'|${escapedName})\\b[\\s\\S]*?(?=\\n\\t(?:column|measure|partition|hierarchy|annotation)\\b|\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
-    "g"
+  if (!file) return { ok: false, path: pbipPath, removedCount: 0 };
+
+  const lines = file.content.split(/\r?\n/);
+  const out: string[] = [];
+  let removed = 0;
+  let skipping = false;
+  let measureIndent = 0;
+  // Erkennt eine measure-Zeile mit gegebenem Namen, optional mit/ohne Quotes.
+  const headerRe = new RegExp(
+    `^(\\s*)measure\\s+(?:'${escapeRegex(measureName)}'|${escapeRegex(measureName)})\\s*(?:=|$)`
   );
-  if (!re.test(file.content)) return { ok: false, path: file.filePath };
-  const cleaned = file.content.replace(re, "\n");
-  return { ok: true, path: backupAndWrite(file.filePath, cleaned) };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!skipping) {
+      const m = line.match(headerRe);
+      if (m) {
+        // Beginn eines zu entfernenden Measure-Blocks
+        skipping = true;
+        measureIndent = m[1].length;
+        removed++;
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    // skipping == true: alle Folgezeilen mit größerer Einrückung gehören zum
+    // Measure-Block. Eine leere Zeile beendet den Block NICHT (Properties
+    // dürfen leere Zeilen dazwischen haben). Eine Zeile mit gleicher oder
+    // kleinerer Einrückung als der Measure-Header beendet den Block.
+    if (line.trim() === "") {
+      // Leerzeilen innerhalb des Measure-Blocks droppen
+      continue;
+    }
+    const lineIndent = line.match(/^\s*/)![0].length;
+    if (lineIndent > measureIndent) {
+      // Property-Zeile innerhalb des Measure-Blocks → droppen
+      continue;
+    }
+    // Geschwister oder Top-Level → Measure-Block beendet, diese Zeile
+    // wieder normal aufnehmen
+    skipping = false;
+    out.push(line);
+  }
+
+  if (removed === 0) {
+    return { ok: false, path: file.filePath, removedCount: 0 };
+  }
+  // Doppelte Leerzeilen normalisieren, die durch das Skippen entstehen
+  const cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n");
+  return {
+    ok: true,
+    path: backupAndWrite(file.filePath, cleaned),
+    removedCount: removed,
+  };
 }
 
 // Wandelt ein HTML-Dokument in einen DAX-String-Literal um, der
@@ -306,13 +355,19 @@ export function addMeasure(
     displayFolder?: string;
     replace?: boolean;
   }
-): { ok: true; path: string; replaced?: boolean } {
+): { ok: true; path: string; replaced?: boolean; removedCount?: number } {
   let replaced = false;
+  let removedCount = 0;
   if (args.replace) {
-    // Wenn schon ein Measure mit dem Namen existiert, vorher entfernen.
+    // Wenn schon Measure(s) mit dem Namen existieren, alle vorher entfernen.
+    // Loop falls aus irgendeinem Grund mehrfach Aufruf nötig ist.
     try {
-      const r = removeMeasure(pbipPath, args.table, args.name);
-      if (r.ok) replaced = true;
+      for (let i = 0; i < 5; i++) {
+        const r = removeMeasure(pbipPath, args.table, args.name);
+        if (!r.ok) break;
+        removedCount += r.removedCount;
+        replaced = true;
+      }
     } catch {
       /* tolerate */
     }
@@ -365,7 +420,7 @@ export function addMeasure(
   return {
     ok: true,
     path: backupAndWrite(file.filePath, joinBlock(lines)),
-    ...(replaced ? { replaced: true } : {}),
+    ...(replaced ? { replaced: true, removedCount } : {}),
   };
 }
 

@@ -15,6 +15,7 @@ import {
   fixAmbiguousRelationships,
   htmlToDaxLiteral,
   listModel,
+  removeMeasure,
   removeRelationship,
   restoreTmdlBackups,
 } from "./tmdl.js";
@@ -575,16 +576,44 @@ export const builtInTools: BuiltInTool[] = [
         ? " Visual auf Seite 1 platziert (HTML-Content-Visual htmlContent443BE3AD55E043BF878BED274D3A6855, Measure gebunden)."
         : "";
 
-      // Verify: nochmal das Modell lesen und prüfen ob die Measure wirklich
-      // dort ist mit nicht-leerem Ausdruck. Wenn nicht, ist was schief gelaufen.
+      // Verify: GENAU eine Measure mit dem Namen muss existieren.
+      // Wenn 0 → Schreibvorgang fehlgeschlagen.
+      // Wenn ≥2 → Duplikat-Bug; sofort entfernen und neu schreiben, sonst
+      //           wirft PBI Desktop "TMDL-Objekte können nicht zusammengeführt
+      //           werden, weil beide die gleiche Eigenschaft expression
+      //           deklarieren".
       let verified = false;
       let verifyError: string | null = null;
       try {
-        const model = listModel(path);
-        const tbl = model.tables.find((t) => t.name === table);
-        const m = tbl?.measures.find((mm) => mm.name === measureName);
-        verified = !!(m && m.expression && m.expression.length > 10);
-        if (!verified) verifyError = "Measure nach Schreibvorgang nicht im Modell auffindbar";
+        let model = listModel(path);
+        let tbl = model.tables.find((t) => t.name === table);
+        let matches = tbl?.measures.filter((mm) => mm.name === measureName) ?? [];
+        if (matches.length > 1) {
+          // Duplikat erkannt → alle entfernen und genau eine neu schreiben
+          for (let i = 0; i < 10; i++) {
+            const r = removeMeasure(path, table, measureName);
+            if (!r.ok) break;
+          }
+          // neu hinzufügen ohne replace (sonst rekursiv)
+          addMeasure(path, {
+            table,
+            name: measureName,
+            expression: dax,
+            displayFolder: "_viBI",
+          });
+          model = listModel(path);
+          tbl = model.tables.find((t) => t.name === table);
+          matches = tbl?.measures.filter((mm) => mm.name === measureName) ?? [];
+        }
+        if (matches.length === 1 && matches[0].expression && matches[0].expression.length > 10) {
+          verified = true;
+        } else if (matches.length > 1) {
+          verifyError = `Duplikat-Bereinigung fehlgeschlagen: noch ${matches.length} Measures mit Namen '${measureName}'`;
+        } else if (matches.length === 0) {
+          verifyError = `Measure '${measureName}' nach Schreibvorgang nicht auffindbar`;
+        } else {
+          verifyError = "Measure existiert, aber Ausdruck leer/zu kurz";
+        }
       } catch (e) {
         verifyError = (e as Error).message;
       }
