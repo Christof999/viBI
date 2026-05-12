@@ -12,6 +12,18 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function directToolNameFrom(text: string, tools: MCPTool[]): string | null {
+  const normalized = text.toLowerCase();
+  const asksForDirectCall =
+    /\b(rufe|führe|fuehre|starte|call|execute)\b/.test(normalized) ||
+    /\bausführen\b|\bausfuehren\b|\baufrufen\b/.test(normalized);
+  if (!asksForDirectCall) return null;
+  const matches = tools
+    .map((tool) => tool.name)
+    .filter((name) => normalized.includes(name.toLowerCase()));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function useChat(tools: MCPTool[]) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
@@ -40,11 +52,56 @@ export function useChat(tools: MCPTool[]) {
       setMessages(next);
       setBusy(true);
 
-      const MAX_STEPS = 8;
+      const MAX_STEPS = 14;
       let producedAnyText = false;
       const toolSummaries: string[] = [];
       try {
         let working = next;
+        const directToolName = directToolNameFrom(text, tools);
+        if (directToolName) {
+          const tool = tools.find((t) => t.name === directToolName);
+          if (tool) {
+            const pending: ChatMessage = {
+              id: uid(),
+              role: "tool",
+              toolName: tool.name,
+              content: "...",
+              pending: true,
+            };
+            working = [...working, pending];
+            setMessages(working);
+            const props =
+              ((tool.inputSchema as { properties?: Record<string, unknown> } | undefined)
+                ?.properties as Record<string, unknown> | undefined) ?? {};
+            const mergedArgs: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(argDefaultsRef.current)) {
+              if (k in props && v !== undefined && v !== "") mergedArgs[k] = v;
+            }
+            const { result } = await helper.callMCPTool(tool.server, tool.name, mergedArgs);
+            const summary =
+              result &&
+              typeof result === "object" &&
+              "summary" in result &&
+              typeof (result as { summary?: unknown }).summary === "string"
+                ? (result as { summary: string }).summary
+                : `${tool.name} wurde ausgeführt.`;
+            const resultMsg: ChatMessage = {
+              ...pending,
+              content: JSON.stringify(result, null, 2),
+              pending: false,
+            };
+            working = working.map((m) => (m.id === pending.id ? resultMsg : m));
+            working = [
+              ...working,
+              { id: uid(), role: "model", content: `Tools sind durchgelaufen: ${summary}` },
+            ];
+            producedAnyText = true;
+            setMessages(working);
+            return;
+          }
+        }
+
+        let stoppedAfterLastToolCall = false;
         for (let step = 0; step < MAX_STEPS; step++) {
           const resp = await callChat({
             messages: toApiMessages(working),
@@ -66,20 +123,6 @@ export function useChat(tools: MCPTool[]) {
           }
 
           if (!resp.toolCalls || resp.toolCalls.length === 0) break;
-          if (step === MAX_STEPS - 1) {
-            // Letzter Loop-Durchlauf: KI hat noch Tool-Aufrufe geplant, aber wir
-            // brechen ab, sonst läuft das endlos. Sichtbarer Hinweis im Chat.
-            const stop: ChatMessage = {
-              id: uid(),
-              role: "model",
-              content:
-                `_(Maximale Tool-Aufruf-Tiefe (${MAX_STEPS}) erreicht – breche ab. ` +
-                `Wenn du willst, dass ich weitermache, sag mir kurz „weiter".)_`,
-            };
-            working = [...working, stop];
-            setMessages(working);
-            break;
-          }
 
           for (const call of resp.toolCalls) {
             const tool = tools.find((t) => t.name === call.name);
@@ -139,6 +182,21 @@ export function useChat(tools: MCPTool[]) {
               setMessages(working);
             }
           }
+          if (step === MAX_STEPS - 1) {
+            stoppedAfterLastToolCall = true;
+            break;
+          }
+        }
+        if (stoppedAfterLastToolCall) {
+          const stop: ChatMessage = {
+            id: uid(),
+            role: "model",
+            content: toolSummaries.length
+              ? `Maximale Tool-Aufruf-Tiefe (${MAX_STEPS}) erreicht, aber der letzte Tool-Aufruf wurde noch ausgeführt: ${toolSummaries[toolSummaries.length - 1]}`
+              : `_(Maximale Tool-Aufruf-Tiefe (${MAX_STEPS}) erreicht. Die bis dahin geplanten Tool-Aufrufe wurden ausgeführt; wenn noch etwas fehlt, bitte den konkreten Tool-Namen nennen.)_`,
+          };
+          working = [...working, stop];
+          setMessages(working);
         }
         // Wenn die KI gar keinen Text produziert hat (alles waren nur
         // Tool-Aufrufe), legen wir einen kurzen Hinweis ins Chat – sonst
