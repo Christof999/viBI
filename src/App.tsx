@@ -161,7 +161,7 @@ export default function App() {
           `1. Immer zuerst list_model aufrufen. Keine Tabellen- oder Spaltennamen erfinden. Die Tabellen aus list_model sind die Wahrheit, auch wenn sie von früheren Vorschlägen oder Business-Central-Beispielen abweichen.\n` +
           `2. Wenn list_model nutzbare Tabellen/Spalten enthält, arbeite damit weiter. Bitte den User NICHT, Business-Central-Tabellen zu laden, nur weil erwartete Namen fehlen.\n` +
           `3. Filter werden ausschließlich als Slicer umgesetzt. Wähle aus vorhandenen Datums-, Jahr/Monat-, Status-, Kategorie-, Kunden-, Artikel- oder Regionsspalten sinnvolle Slicer oder übergib sie an create_powerbi_report_visuals.\n` +
-          `4. Beziehungen zwischen Tabellen müssen hergestellt werden, wenn mehrere Tabellen für KPIs/Filter/Visuals zusammenwirken. Nutze add_relationship nur mit echten Spalten aus list_model und vermeide Duplikate.\n` +
+          `4. Beziehungen zwischen Tabellen müssen hergestellt werden, wenn mehrere Tabellen für KPIs/Filter/Visuals zusammenwirken. Nutze add_relationship nur mit echten Spalten aus list_model und vermeide Duplikate. WICHTIG: Vermeide auch indirekte Mehrfachpfade (z.B. A→B→C plus A→C). Wenn verify_model activePathConflicts meldet oder PBI PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH zeigt, sofort fix_ambiguous_relationships aufrufen und danach verify_model erneut.\n` +
           `5. Visuals müssen direkt im Bericht landen: create_powerbi_report_visuals schreibt Slicer, KPI-Karten, Balkendiagramm und Tabelle in report.json und bindet sie an Measures/Spalten.\n` +
           `6. verify_model nach add_measure/add_relationship aufrufen. Wenn verify_model Probleme meldet, nicht einfach weiterdesignen, sondern korrigieren oder klar melden.\n` +
           `7. Nach Schreib-Tools immer den Reload-Hinweis nennen: PBI Desktop schließen ohne Speichern, dann erneut öffnen.\n\n`
@@ -174,7 +174,7 @@ export default function App() {
       `- add_calculated_table({pbipPath, name, expression, dataCategory?}): beliebige neue kalkulierte Tabelle anlegen (z.B. SUMMARIZE, DISTINCT). Single-line.\n` +
       `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): calc column hinzufügen.\n` +
       `- add_relationship({...}) / remove_relationship({pbipPath, id}): NUR auf explizite User-Anforderung. Standard-Workflow legt KEINE Beziehungen an, weil das HTML-Dashboard ohne sie auskommt und sie die häufigste Fehlerquelle sind.\n` +
-      `- fix_ambiguous_relationships({pbipPath}): Recovery-Tool – entfernt Duplikate, deaktiviert mehrfach-aktive Beziehungen.\n` +
+      `- fix_ambiguous_relationships({pbipPath}): Recovery-Tool – entfernt Duplikate, deaktiviert mehrfach-aktive Beziehungen und bricht aktive Alternativpfade/Zyklen (A→B→C plus A→C) auf.\n` +
       `- restore_tmdl_backup({pbipPath}): Recovery-Tool – stellt den Stand vor der letzten viBI-Änderung wieder her.\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
       `- get_full_page_html({pbipPath}): aktuelles Design-HTML lesen (Design-Phase).\n` +
@@ -194,7 +194,7 @@ export default function App() {
       `2. add_date_table NUR wenn list_model keine Tabelle namens 'Date' enthält. Frische viBI-Projekte haben bereits eine.\n` +
       `3. Pro KPI EIN add_measure aufrufen. Der DAX-Ausdruck soll AUF EINE TABELLE bezogen sein, außer der PowerBI-Visuals-Pfad verlangt eine sauber verifizierte Beziehung.\n` +
       (state.designMode === "powerbi"
-        ? `4. Für native PowerBI Visuals: fehlende Beziehungen per add_relationship herstellen und in verify_model als expectedRelationships prüfen.\n`
+        ? `4. Für native PowerBI Visuals: fehlende Beziehungen per add_relationship herstellen und in verify_model als expectedRelationships prüfen. Wenn verify_model ambiguousPaths oder activePathConflicts meldet, fix_ambiguous_relationships ausführen und erneut verifizieren, bevor Visuals erstellt werden.\n`
         : `4. Im HTML-Pfad KEINE add_relationship-Aufrufe, außer der User fragt explizit nach Beziehungen. Das HTML-Dashboard rendert Werte über Measure-Strings.\n`) +
       `5. NACH ALLEN SCHREIB-TOOLS: verify_model mit expectedTables, expectedMeasures und – im PowerBI-Visuals-Pfad – expectedRelationships aufrufen.\n` +
       `6. AM ENDE eine kurze deutsche Bullet-Antwort: welche Measures angelegt (mit Formel), Reload-Hinweis (Datei→schließen ohne Speichern→erneut öffnen). Kein Kommentar = User denkt du hängst.\n\n` +

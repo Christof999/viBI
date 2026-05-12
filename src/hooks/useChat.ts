@@ -42,6 +42,7 @@ export function useChat(tools: MCPTool[]) {
 
       const MAX_STEPS = 8;
       let producedAnyText = false;
+      const toolSummaries: string[] = [];
       try {
         let working = next;
         for (let step = 0; step < MAX_STEPS; step++) {
@@ -111,6 +112,14 @@ export function useChat(tools: MCPTool[]) {
                 call.name,
                 mergedArgs
               );
+              if (
+                result &&
+                typeof result === "object" &&
+                "summary" in result &&
+                typeof (result as { summary?: unknown }).summary === "string"
+              ) {
+                toolSummaries.push((result as { summary: string }).summary);
+              }
               const resultMsg: ChatMessage = {
                 ...pending,
                 content: JSON.stringify(result, null, 2),
@@ -139,8 +148,9 @@ export function useChat(tools: MCPTool[]) {
           const empty: ChatMessage = {
             id: uid(),
             role: "model",
-            content:
-              "_(KI hat keine Zusammenfassung geliefert. Tools sind durchgelaufen – siehe Tool-Blöcke oben. Frag nach einer Zusammenfassung, wenn du eine Erklärung in Worten willst.)_",
+            content: toolSummaries.length
+              ? `Tools sind durchgelaufen: ${toolSummaries[toolSummaries.length - 1]}`
+              : "_(KI hat keine Zusammenfassung geliefert. Tools sind durchgelaufen – siehe Tool-Blöcke oben. Frag nach einer Zusammenfassung, wenn du eine Erklärung in Worten willst.)_",
           };
           working = [...working, empty];
           setMessages(working);

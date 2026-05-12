@@ -101,6 +101,113 @@ export interface ListedRelationship {
   toColumn: string;
   isActive: boolean;
 }
+export interface ActiveRelationshipPathConflict {
+  relationship: ListedRelationship;
+  alternativePath: string[];
+  reason: string;
+}
+
+class TableDisjointSet {
+  private parent = new Map<string, string>();
+
+  find(x: string): string {
+    if (!this.parent.has(x)) this.parent.set(x, x);
+    const p = this.parent.get(x)!;
+    if (p === x) return x;
+    const root = this.find(p);
+    this.parent.set(x, root);
+    return root;
+  }
+
+  union(a: string, b: string): boolean {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return false;
+    this.parent.set(rb, ra);
+    return true;
+  }
+}
+
+function relationshipKeepScore(r: ListedRelationship): number {
+  let score = 0;
+  // Power BI auto-detection often creates the redundant direct edge that causes
+  // ambiguity. Prefer keeping explicit/user-created relationships when a cycle
+  // must be broken.
+  if (!/^AutoDetected_/i.test(r.id)) score += 50;
+  if (r.fromTable === "Date" || r.toTable === "Date") score += 15;
+  if (/date|datum/i.test(r.fromColumn) || /date|datum/i.test(r.toColumn)) score += 5;
+  if (/id|key|code|no|nr|number|nummer/i.test(r.fromColumn)) score += 3;
+  if (/id|key|code|no|nr|number|nummer/i.test(r.toColumn)) score += 3;
+  return score;
+}
+
+function relationshipLabel(r: ListedRelationship): string {
+  return `${r.fromTable}.${r.fromColumn}→${r.toTable}.${r.toColumn}`;
+}
+
+function findAlternativeTablePath(
+  kept: ListedRelationship[],
+  fromTable: string,
+  toTable: string
+): string[] {
+  const graph = new Map<string, { next: string; label: string }[]>();
+  for (const r of kept) {
+    const label = relationshipLabel(r);
+    if (!graph.has(r.fromTable)) graph.set(r.fromTable, []);
+    if (!graph.has(r.toTable)) graph.set(r.toTable, []);
+    graph.get(r.fromTable)!.push({ next: r.toTable, label });
+    graph.get(r.toTable)!.push({ next: r.fromTable, label });
+  }
+
+  const queue: { table: string; path: string[] }[] = [{ table: fromTable, path: [] }];
+  const seen = new Set<string>([fromTable]);
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.table === toTable) return cur.path;
+    for (const edge of graph.get(cur.table) ?? []) {
+      if (seen.has(edge.next)) continue;
+      seen.add(edge.next);
+      queue.push({ table: edge.next, path: [...cur.path, edge.label] });
+    }
+  }
+  return [];
+}
+
+export function findActiveRelationshipPathConflicts(
+  relationships: ListedRelationship[]
+): ActiveRelationshipPathConflict[] {
+  const active = relationships.filter((r) => r.isActive);
+  const ordered = active
+    .map((relationship, index) => ({ relationship, index }))
+    .sort((a, b) => {
+      const scoreDelta = relationshipKeepScore(b.relationship) - relationshipKeepScore(a.relationship);
+      return scoreDelta || a.index - b.index;
+    });
+
+  const dsu = new TableDisjointSet();
+  const kept: ListedRelationship[] = [];
+  const conflicts: ActiveRelationshipPathConflict[] = [];
+  for (const { relationship } of ordered) {
+    if (dsu.union(relationship.fromTable, relationship.toTable)) {
+      kept.push(relationship);
+      continue;
+    }
+    const alternativePath = findAlternativeTablePath(
+      kept,
+      relationship.fromTable,
+      relationship.toTable
+    );
+    conflicts.push({
+      relationship,
+      alternativePath,
+      reason:
+        alternativePath.length > 0
+          ? `Aktiver Alternativpfad existiert: ${alternativePath.join(" -> ")}`
+          : "Aktiver Beziehungszyklus erkannt.",
+    });
+  }
+  return conflicts;
+}
 
 export function listModel(pbipPath: string): {
   pbipPath: string;
@@ -706,6 +813,26 @@ export function fixAmbiguousRelationships(pbipPath: string): {
     }
   }
 
+  // Schritt 2b: aktive indirekte Mehrfachpfade finden. Beispiel:
+  // A -> B -> C und zusätzlich A -> C. Power BI meldet dann oft
+  // "ambiguous path", obwohl es keine zweite direkte Beziehung zwischen
+  // demselben Tabellenpaar gibt.
+  const blockedIds = new Set([
+    ...orphaned.map((r) => r.id),
+    ...exactDups.map((r) => r.id),
+    ...toDeactivate.map((r) => r.id),
+  ]);
+  const pathConflicts = findActiveRelationshipPathConflicts(
+    model.relationships.filter((r) => !blockedIds.has(r.id))
+  );
+  const graphDeactivate = pathConflicts.map((c) => c.relationship);
+  const deactivateIds = new Set<string>();
+  const deactivatePlan = [...toDeactivate, ...graphDeactivate].filter((r) => {
+    if (deactivateIds.has(r.id)) return false;
+    deactivateIds.add(r.id);
+    return true;
+  });
+
   // Schritt 3: alle betroffenen TMDL-Dateien anpassen
   for (const f of d.files) {
     let content = f.content;
@@ -736,7 +863,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
         changed = true;
       }
     }
-    for (const inact of toDeactivate) {
+    for (const inact of deactivatePlan) {
       // Block des Relationships finden, isActive: false hinzufügen falls noch nicht da
       const re = new RegExp(
         `((?:^|\\n)relationship\\s+${escapeRegex(inact.id)}[\\s\\S]*?)(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
@@ -744,8 +871,11 @@ export function fixAmbiguousRelationships(pbipPath: string): {
       );
       content = content.replace(re, (block) => {
         if (/isActive:\s*false/.test(block)) return block;
+        const pathConflict = pathConflicts.find((c) => c.relationship.id === inact.id);
         log.push(
-          `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (zweite Beziehung zwischen ${inact.fromTable} und ${inact.toTable})`
+          pathConflict
+            ? `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (${pathConflict.reason})`
+            : `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (zweite Beziehung zwischen ${inact.fromTable} und ${inact.toTable})`
         );
         deactivated++;
         changed = true;

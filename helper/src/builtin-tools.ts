@@ -12,6 +12,7 @@ import {
   addDateTable,
   addMeasure,
   addRelationship,
+  findActiveRelationshipPathConflicts,
   fixAmbiguousRelationships,
   htmlToDaxLiteral,
   listModel,
@@ -836,7 +837,7 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "fix_ambiguous_relationships",
     description:
-      "Repariert ein Modell mit mehrdeutigen Beziehungs-Pfaden (Power BI Fehler PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH). Entfernt exakte Duplikate (gleiches Spaltenpaar) und setzt jede zweite/weitere aktive Beziehung zwischen demselben Tabellenpaar auf inactive. Aufrufen, wenn PBI Desktop diesen Fehler beim Öffnen wirft.",
+      "Repariert ein Modell mit mehrdeutigen Beziehungs-Pfaden (Power BI Fehler PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH). Entfernt exakte Duplikate, setzt jede zweite/weitere aktive Beziehung zwischen demselben Tabellenpaar auf inactive und erkennt aktive Alternativpfade/Zyklen wie A→B→C plus A→C. Aufrufen, wenn PBI Desktop diesen Fehler beim Öffnen wirft.",
     inputSchema: {
       type: "object",
       properties: {
@@ -854,7 +855,7 @@ export const builtInTools: BuiltInTool[] = [
         summary:
           total === 0
             ? "Keine Probleme gefunden – Beziehungen sind eindeutig und valide."
-            : `Repariert: ${r.brokenRemovedCount} orphan, ${r.removedCount} Duplikat(e), ${r.deactivatedCount} aktive auf inactive gesetzt.`,
+            : `Repariert: ${r.brokenRemovedCount} orphan, ${r.removedCount} Duplikat(e), ${r.deactivatedCount} aktive/alternative Pfad-Beziehung(en) auf inactive gesetzt.`,
         reloadHint:
           total > 0
             ? "PBI Desktop schließen ohne Speichern, dann erneut öffnen – die Probleme sollten weg sein."
@@ -1119,6 +1120,17 @@ export const builtInTools: BuiltInTool[] = [
         .filter(([, n]) => n > 1)
         .map(([k, n]) => ({ tablePair: k.replace("=", " ↔ "), activeCount: n }));
 
+      const activePathConflicts = findActiveRelationshipPathConflicts(model.relationships)
+        .filter((conflict) => conflict.alternativePath.length > 0)
+        .map((conflict) => ({
+          relationshipId: conflict.relationship.id,
+          relationship:
+            `${conflict.relationship.fromTable}.${conflict.relationship.fromColumn}` +
+            `→${conflict.relationship.toTable}.${conflict.relationship.toColumn}`,
+          alternativePath: conflict.alternativePath,
+          reason: conflict.reason,
+        }));
+
       // Beziehungen mit nicht existierenden Tabellen/Spalten finden – die
       // sind die häufigste Ursache für PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH-
       // ähnliche Loadfehler (PBI verwirft die Beziehung dann nicht stumm,
@@ -1157,6 +1169,7 @@ export const builtInTools: BuiltInTool[] = [
         allMeasuresOk &&
         duplicates === 0 &&
         ambiguousPaths.length === 0 &&
+        activePathConflicts.length === 0 &&
         brokenRelationships.length === 0;
 
       const summaryLines: string[] = [];
@@ -1179,6 +1192,11 @@ export const builtInTools: BuiltInTool[] = [
           `🚨 ${ambiguousPaths.length} mehrdeutige Pfad(e) – ruf fix_ambiguous_relationships auf`
         );
       }
+      if (activePathConflicts.length > 0) {
+        summaryLines.push(
+          `🚨 ${activePathConflicts.length} aktive Alternativpfad-Beziehung(en) – ruf fix_ambiguous_relationships auf`
+        );
+      }
       if (brokenRelationships.length > 0) {
         summaryLines.push(
           `🚨 ${brokenRelationships.length} Beziehung(en) referenzieren nicht-existierende Spalten – ruf fix_ambiguous_relationships auf, um sie zu entfernen`
@@ -1194,6 +1212,7 @@ export const builtInTools: BuiltInTool[] = [
         dateTableOk: dateOk,
         duplicateRelationships: duplicates,
         ambiguousPaths,
+        activePathConflicts,
         brokenRelationships,
         actualTables: model.tables.map((t) => t.name),
         actualRelationships: model.relationships.map(
