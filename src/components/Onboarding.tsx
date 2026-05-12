@@ -483,9 +483,8 @@ function GoalStep({
           lineHeight: 1.5,
         }}
       >
-        ℹ️ viBI weiß, dass alle deine Niederlassungen <strong>Microsoft Dynamics 365 Business
-        Central</strong> als ERP nutzen. Im nächsten Schritt nach dem Setup
-        bekommst du eine Liste der dafür passenden BC-Tabellen vorgeschlagen.
+        ℹ️ viBI kann passende Tabellen vorschlagen, arbeitet später aber immer mit den Tabellen
+        und Spalten, die im PowerBI-Modell tatsächlich geladen und gespeichert sind.
       </div>
     </div>
   );

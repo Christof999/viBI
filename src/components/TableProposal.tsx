@@ -72,7 +72,7 @@ export function TableProposal({ project, initial, onAccept, onRequestDifferent }
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h3 style={{ margin: 0, fontSize: 15 }}>
-              Vorgeschlagene Quelltabellen aus Business Central
+              Vorgeschlagene Quelltabellen
             </h3>
             <button onClick={fetchSuggestion} disabled={loading} style={{ fontSize: 12 }}>
               {loading ? "Lade…" : "Neu vorschlagen"}
@@ -145,7 +145,8 @@ export function TableProposal({ project, initial, onAccept, onRequestDifferent }
           }}
         >
           <strong style={{ color: "var(--text)" }}>So gehst du vor:</strong> Lade die oben gelisteten
-          Tabellen in Power BI Desktop (Daten abrufen → Business Central / OData / Fabric Mirror).
+          Tabellen in Power BI Desktop (z.B. Business Central, OData, Fabric Mirror, Excel,
+          SQL oder andere Quellen).
           Sobald alle Tabellen importiert <em>und der Bericht gespeichert</em> ist, klick auf
           „Tabellen geladen". viBI legt dann pro KPI eine passende DAX-Measure an. Wenn du später
           „PowerBI Visuals" wählst, werden die nötigen Beziehungen gezielt angelegt und geprüft.

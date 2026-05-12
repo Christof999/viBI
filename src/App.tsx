@@ -47,12 +47,13 @@ function powerBIVisualPrompt(project: ProjectConfig, suggestion?: TableSuggestio
     `Ziel: ${project.goal}\n` +
     `KPIs: ${kpis}\n` +
     (tables ? `Vorgeschlagene/geladene Tabellen:\n - ${tables}\n\n` : "\n") +
+    `WICHTIG: Die vorgeschlagenen Tabellen und frühere Business-Central-Annahmen sind nur Hinweise. Wahrheit ist ausschließlich das aktuelle PowerBI-Modell aus list_model. Wenn list_model andere Tabellen zeigt (z.B. Orders, Products, Customers oder beliebige kundenspezifische Tabellen), arbeite mit genau diesen Tabellen und Spalten weiter und fordere NICHT Business-Central-Tabellen nach.\n\n` +
     `Verbindlicher Ablauf:\n` +
-    `1. list_model aufrufen und echte Tabellen, Spalten, Measures und bestehende Beziehungen prüfen.\n` +
-    `2. Fehlende KPI-Measures per add_measure anlegen oder vorhandene passende Measures wiederverwenden.\n` +
-    `3. Beziehungen zwischen Fakten- und Dimensionstabellen herstellen: nur echte Spaltennamen aus list_model verwenden, typische Keys/Datumsfelder nutzen, keine Duplikate erzeugen. Wenn eine Beziehung wegen existierender aktiver Beziehung inactive wird, im Ergebnis erwähnen.\n` +
+    `1. list_model aufrufen und die dort sichtbaren Tabellen, Spalten, Measures und Beziehungen als alleinige Grundlage verwenden.\n` +
+    `2. Aus den vorhandenen Tabellen sinnvolle KPI-Measures ableiten oder vorhandene passende Measures wiederverwenden. Wenn gewünschte KPIs nicht exakt passen, wähle naheliegende Visuals aus den verfügbaren Zahlen-, Datums- und Textspalten.\n` +
+    `3. Beziehungen zwischen Fakten- und Dimensionstabellen herstellen, soweit sie aus vorhandenen Keys/Datumsfeldern plausibel und sicher sind. Nur echte Spaltennamen aus list_model verwenden, typische Keys/Datumsfelder nutzen, keine Duplikate erzeugen. Wenn eine Beziehung wegen existierender aktiver Beziehung inactive wird, im Ergebnis erwähnen.\n` +
     `4. verify_model mit erwarteten Measures und Beziehungen aufrufen.\n` +
-    `5. create_powerbi_report_visuals aufrufen. Filter müssen Slicer sein. Visuals müssen direkt an Measures/Spalten gebunden sein.\n` +
+    `5. create_powerbi_report_visuals aufrufen. Filter müssen Slicer sein. Visuals müssen direkt an Measures/Spalten aus list_model gebunden sein.\n` +
     `6. Kurz auf Deutsch zusammenfassen: angelegte/wiederverwendete Measures, Beziehungen, Slicer/Visuals und Reload-Hinweis.`
   );
 }
@@ -121,7 +122,7 @@ export default function App() {
       (state.designMode
         ? `- Gewählter Designweg: ${state.designMode === "html" ? "HTML" : "PowerBI Visuals"}\n`
         : "") +
-      `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
+      `\nDATENQUELLEN-HINWEIS: Business Central kann eine Quelle sein, ist aber NICHT verbindlich. Im Design- und Visual-Schritt gilt ausschließlich, was list_model/read_pbip_metadata im aktuellen PowerBI-Modell tatsächlich findet. Wenn andere Tabellen vorhanden sind, verwende diese ohne Rückfrage nach Business-Central-Tabellen.\n\n` +
       (state.phase === "design" && state.designMode === "html"
         ? `DESIGN-PHASE-FOKUS:\n` +
           HTML_INTERFACE_DESIGN_GUIDE +
@@ -157,12 +158,13 @@ export default function App() {
         ? `POWERBI-VISUALS-PHASE-FOKUS:\n` +
           `Du erstellst KEIN HTML und nutzt keine HTML-Content-Visuals. Ziel ist ein nativer PowerBI-Bericht mit Slicern, Beziehungen, Measures und direkt gebundenen Standard-Visuals.\n\n` +
           `Verbindliche Regeln:\n` +
-          `1. Immer zuerst list_model aufrufen. Keine Tabellen- oder Spaltennamen erfinden.\n` +
-          `2. Filter werden ausschließlich als Slicer umgesetzt. Verwende create_powerbi_report_visuals mit slicers oder lasse sinnvolle Slicer automatisch wählen.\n` +
-          `3. Beziehungen zwischen Tabellen müssen hergestellt werden, wenn mehrere Tabellen für KPIs/Filter/Visuals zusammenwirken. Nutze add_relationship nur mit echten Spalten aus list_model und vermeide Duplikate.\n` +
-          `4. Visuals müssen direkt im Bericht landen: create_powerbi_report_visuals schreibt Slicer, KPI-Karten, Balkendiagramm und Tabelle in report.json und bindet sie an Measures/Spalten.\n` +
-          `5. verify_model nach add_measure/add_relationship aufrufen. Wenn verify_model Probleme meldet, nicht einfach weiterdesignen, sondern korrigieren oder klar melden.\n` +
-          `6. Nach Schreib-Tools immer den Reload-Hinweis nennen: PBI Desktop schließen ohne Speichern, dann erneut öffnen.\n\n`
+          `1. Immer zuerst list_model aufrufen. Keine Tabellen- oder Spaltennamen erfinden. Die Tabellen aus list_model sind die Wahrheit, auch wenn sie von früheren Vorschlägen oder Business-Central-Beispielen abweichen.\n` +
+          `2. Wenn list_model nutzbare Tabellen/Spalten enthält, arbeite damit weiter. Bitte den User NICHT, Business-Central-Tabellen zu laden, nur weil erwartete Namen fehlen.\n` +
+          `3. Filter werden ausschließlich als Slicer umgesetzt. Wähle aus vorhandenen Datums-, Jahr/Monat-, Status-, Kategorie-, Kunden-, Artikel- oder Regionsspalten sinnvolle Slicer oder übergib sie an create_powerbi_report_visuals.\n` +
+          `4. Beziehungen zwischen Tabellen müssen hergestellt werden, wenn mehrere Tabellen für KPIs/Filter/Visuals zusammenwirken. Nutze add_relationship nur mit echten Spalten aus list_model und vermeide Duplikate.\n` +
+          `5. Visuals müssen direkt im Bericht landen: create_powerbi_report_visuals schreibt Slicer, KPI-Karten, Balkendiagramm und Tabelle in report.json und bindet sie an Measures/Spalten.\n` +
+          `6. verify_model nach add_measure/add_relationship aufrufen. Wenn verify_model Probleme meldet, nicht einfach weiterdesignen, sondern korrigieren oder klar melden.\n` +
+          `7. Nach Schreib-Tools immer den Reload-Hinweis nennen: PBI Desktop schließen ohne Speichern, dann erneut öffnen.\n\n`
         : "") +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
@@ -279,7 +281,7 @@ export default function App() {
       .join("\n - ");
     const kpiLine = state.project.kpis.length
       ? state.project.kpis.join(", ")
-      : "(keine konkreten KPIs angegeben – schlage typische BC-KPIs vor)";
+      : "(keine konkreten KPIs angegeben – nutze sinnvolle Kennzahlen aus dem tatsächlich geladenen Modell)";
     chat.send(
       `Modelliere jetzt den Bericht „${state.project.name}" für mich. Ziel: ${state.project.goal}\n\n` +
         `Geladene Tabellen:\n - ${tableLine}\n\n` +
