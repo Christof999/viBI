@@ -38,11 +38,27 @@ export function PowerBIVisualPanel({ project, pbipPath, suggestion }: Props) {
     setGenerating(true);
     setGenerateMsg(null);
     try {
-      const { result } = await helper.callMCPTool("helper", "create_powerbi_report_visuals", {
-        pbipPath,
-        title: project.name,
-        subtitle: project.goal,
-      });
+      let result: unknown;
+      try {
+        const response = await helper.createPowerBIReportVisuals({
+          pbipPath,
+          title: project.name,
+          subtitle: project.goal,
+        });
+        result = response.result;
+      } catch (endpointError) {
+        const msg = (endpointError as Error).message;
+        if (msg.includes("404") || msg.includes("create_powerbi_report_visuals")) {
+          const response = await helper.callMCPTool("helper", "create_powerbi_report_visuals", {
+            pbipPath,
+            title: project.name,
+            subtitle: project.goal,
+          });
+          result = response.result;
+        } else {
+          throw endpointError;
+        }
+      }
       const payload = result as {
         summary?: string;
         reportJsonPath?: string;
@@ -68,9 +84,21 @@ export function PowerBIVisualPanel({ project, pbipPath, suggestion }: Props) {
         details,
       });
     } catch (e) {
+      const raw = (e as Error).message;
+      const isOldHelper =
+        raw.includes("Built-in Tool 'create_powerbi_report_visuals' unbekannt") ||
+        raw.includes("Cannot POST /report/create-powerbi-visuals");
       setGenerateMsg({
         kind: "err",
-        text: `Visuals konnten nicht erstellt werden: ${(e as Error).message}`,
+        text: isOldHelper
+          ? "Der lokale Helper ist noch eine alte laufende Version und kennt die PowerBI-Visual-Erstellung nicht. Bitte Helper im Terminal/PowerShell stoppen und neu starten, danach erneut klicken."
+          : `Visuals konnten nicht erstellt werden: ${raw}`,
+        details: isOldHelper
+          ? [
+              "Falls du den Helper per Script gestartet hast: Fenster schließen und public/vibi-helper-setup.ps1 erneut ausführen.",
+              "Falls du im Repo arbeitest: npm --prefix helper run build && npm --prefix helper start.",
+            ]
+          : undefined,
       });
     } finally {
       setGenerating(false);

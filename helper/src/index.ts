@@ -258,6 +258,24 @@ app.post("/report/apply-html", (req, res) => {
   }
 });
 
+app.post("/report/create-powerbi-visuals", async (req, res) => {
+  try {
+    const tool = builtInTools.find((t) => t.name === "create_powerbi_report_visuals");
+    if (!tool) {
+      res.status(500).json({
+        ok: false,
+        error:
+          "Helper-Build enthält create_powerbi_report_visuals nicht. Bitte Helper aktualisieren und neu starten.",
+      });
+      return;
+    }
+    const result = await tool.handler((req.body ?? {}) as Record<string, unknown>);
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 app.get("/design/html", (req, res) => {
   const pbipPath = req.query.pbipPath;
   if (typeof pbipPath !== "string") {

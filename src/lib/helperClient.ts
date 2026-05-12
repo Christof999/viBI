@@ -117,6 +117,17 @@ export const helper = {
     });
   },
 
+  createPowerBIReportVisuals(input: {
+    pbipPath: string;
+    title?: string;
+    subtitle?: string;
+  }): Promise<{ result: unknown }> {
+    return req("/report/create-powerbi-visuals", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
   runModeling(input: {
     goal: string;
     kpis: string[];
