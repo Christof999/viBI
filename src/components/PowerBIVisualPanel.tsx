@@ -7,12 +7,17 @@ interface Props {
   project: ProjectConfig;
   pbipPath?: string;
   suggestion?: TableSuggestion;
-  onGenerate: () => void;
 }
 
-export function PowerBIVisualPanel({ project, pbipPath, suggestion, onGenerate }: Props) {
+export function PowerBIVisualPanel({ project, pbipPath, suggestion }: Props) {
   const [opening, setOpening] = useState(false);
   const [openMsg, setOpenMsg] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generateMsg, setGenerateMsg] = useState<{
+    kind: "ok" | "err";
+    text: string;
+    details?: string[];
+  } | null>(null);
 
   const openInPBI = async () => {
     if (!pbipPath) return;
@@ -25,6 +30,50 @@ export function PowerBIVisualPanel({ project, pbipPath, suggestion, onGenerate }
       setOpenMsg(`Konnte PBI Desktop nicht öffnen: ${(e as Error).message}`);
     } finally {
       setOpening(false);
+    }
+  };
+
+  const createVisuals = async () => {
+    if (!pbipPath) return;
+    setGenerating(true);
+    setGenerateMsg(null);
+    try {
+      const { result } = await helper.callMCPTool("helper", "create_powerbi_report_visuals", {
+        pbipPath,
+        title: project.name,
+        subtitle: project.goal,
+      });
+      const payload = result as {
+        summary?: string;
+        reportJsonPath?: string;
+        reloadHint?: string;
+        visuals?: {
+          slicers?: unknown[];
+          cards?: unknown[];
+          barChart?: unknown;
+          table?: unknown;
+        };
+      };
+      const details = [
+        payload.reportJsonPath ? `report.json: ${payload.reportJsonPath}` : null,
+        payload.visuals?.slicers ? `Slicer: ${payload.visuals.slicers.length}` : null,
+        payload.visuals?.cards ? `KPI-Karten: ${payload.visuals.cards.length}` : null,
+        payload.visuals?.barChart ? "Balkendiagramm: erstellt" : null,
+        payload.visuals?.table ? "Tabelle: erstellt" : null,
+        payload.reloadHint ?? "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      ].filter(Boolean) as string[];
+      setGenerateMsg({
+        kind: "ok",
+        text: payload.summary ?? "Native PowerBI-Visuals wurden erstellt.",
+        details,
+      });
+    } catch (e) {
+      setGenerateMsg({
+        kind: "err",
+        text: `Visuals konnten nicht erstellt werden: ${(e as Error).message}`,
+      });
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -110,10 +159,37 @@ export function PowerBIVisualPanel({ project, pbipPath, suggestion, onGenerate }
           <button onClick={openInPBI} disabled={!pbipPath || opening}>
             {opening ? "Öffne…" : "In PBI Desktop öffnen"}
           </button>
-          <button className="primary" onClick={onGenerate} disabled={!pbipPath}>
-            Native Visuals mit KI erstellen
+          <button className="primary" onClick={createVisuals} disabled={!pbipPath || generating}>
+            {generating ? "Erstelle Visuals…" : "Native Visuals direkt erstellen"}
           </button>
         </section>
+
+        {generateMsg && (
+          <section
+            style={{
+              background: generateMsg.kind === "err" ? "rgba(220,80,80,.12)" : "rgba(80,200,120,.12)",
+              border:
+                generateMsg.kind === "err"
+                  ? "1px solid rgba(220,80,80,.35)"
+                  : "1px solid rgba(80,200,120,.35)",
+              borderRadius: 10,
+              padding: 12,
+              fontSize: 12,
+              color: generateMsg.kind === "err" ? "var(--danger)" : "var(--ok)",
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: generateMsg.details?.length ? 6 : 0 }}>
+              {generateMsg.text}
+            </div>
+            {generateMsg.details && generateMsg.details.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+                {generateMsg.details.map((detail) => (
+                  <li key={detail}>{detail}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         {openMsg && (
           <div

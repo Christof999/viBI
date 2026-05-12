@@ -21,7 +21,16 @@ function directToolNameFrom(text: string, tools: MCPTool[]): string | null {
   const matches = tools
     .map((tool) => tool.name)
     .filter((name) => normalized.includes(name.toLowerCase()));
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length === 1) return matches[0];
+  if (
+    tools.some((tool) => tool.name === "create_powerbi_report_visuals") &&
+    /\bvisuals?\b/.test(normalized) &&
+    /(erstell|angelegt|kein|keine|fehlt|fehl)/.test(normalized) &&
+    !/\bhtml\b/.test(normalized)
+  ) {
+    return "create_powerbi_report_visuals";
+  }
+  return null;
 }
 
 export function useChat(tools: MCPTool[]) {

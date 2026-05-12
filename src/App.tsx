@@ -34,30 +34,6 @@ const HTML_INTERFACE_DESIGN_GUIDE =
   `Nutze Design-Tokens mit sprechenden Namen, vier Text-Hierarchien, eine konsistente Spacing-Skala, subtile Layer statt harter Linien, klare Zustände und tabellarische Zahlen. Karten, Tabellen und Charts sollen jeweils für ihren Inhalt gestaltet sein, nicht als austauschbares Raster.\n` +
   `Vor dem Speichern prüfst du Swap-Test, Squint-Test, Signature-Test und Token-Test. Wenn der Entwurf ohne Produktname nicht erkennbar wäre, iteriere zuerst.\n\n`;
 
-function powerBIVisualPrompt(project: ProjectConfig, suggestion?: TableSuggestion): string {
-  const tables = suggestion?.tables
-    .map((table) => `${table.name} (${table.keyColumns.join(", ") || "keine Key-Spalten angegeben"})`)
-    .join("\n - ");
-  const kpis = project.kpis.length
-    ? project.kpis.join(", ")
-    : "(keine konkreten KPIs angegeben – verwende sinnvolle Measures aus dem Modell)";
-
-  return (
-    `Erstelle jetzt den Bericht „${project.name}" als NATIVE PowerBI Visuals, nicht als HTML.\n\n` +
-    `Ziel: ${project.goal}\n` +
-    `KPIs: ${kpis}\n` +
-    (tables ? `Vorgeschlagene/geladene Tabellen:\n - ${tables}\n\n` : "\n") +
-    `WICHTIG: Die vorgeschlagenen Tabellen und frühere Business-Central-Annahmen sind nur Hinweise. Wahrheit ist ausschließlich das aktuelle PowerBI-Modell aus list_model. Wenn list_model andere Tabellen zeigt (z.B. Orders, Products, Customers oder beliebige kundenspezifische Tabellen), arbeite mit genau diesen Tabellen und Spalten weiter und fordere NICHT Business-Central-Tabellen nach.\n\n` +
-    `Verbindlicher Ablauf:\n` +
-    `1. list_model aufrufen und die dort sichtbaren Tabellen, Spalten, Measures und Beziehungen als alleinige Grundlage verwenden.\n` +
-    `2. Aus den vorhandenen Tabellen sinnvolle KPI-Measures ableiten oder vorhandene passende Measures wiederverwenden. Wenn gewünschte KPIs nicht exakt passen, wähle naheliegende Visuals aus den verfügbaren Zahlen-, Datums- und Textspalten.\n` +
-    `3. Beziehungen zwischen Fakten- und Dimensionstabellen herstellen, soweit sie aus vorhandenen Keys/Datumsfeldern plausibel und sicher sind. Nur echte Spaltennamen aus list_model verwenden, typische Keys/Datumsfelder nutzen, keine Duplikate erzeugen. Wenn eine Beziehung wegen existierender aktiver Beziehung inactive wird, im Ergebnis erwähnen.\n` +
-    `4. verify_model mit erwarteten Measures und Beziehungen aufrufen.\n` +
-    `5. create_powerbi_report_visuals aufrufen. Filter müssen Slicer sein. Visuals müssen direkt an Measures/Spalten aus list_model gebunden sein.\n` +
-    `6. Kurz auf Deutsch zusammenfassen: angelegte/wiederverwendete Measures, Beziehungen, Slicer/Visuals und Reload-Hinweis.`
-  );
-}
-
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [status, setStatus] = useState<HelperStatus | null>(null);
@@ -365,11 +341,6 @@ export default function App() {
     );
   };
 
-  const onGeneratePowerBIVisuals = () => {
-    if (!state.project) return;
-    chat.send(powerBIVisualPrompt(state.project, state.suggestion));
-  };
-
   const openLibraryProject = (p: LibraryProject) => {
     const project: ProjectConfig = {
       name: p.name,
@@ -498,7 +469,6 @@ export default function App() {
             project={state.project}
             pbipPath={state.pbipPath}
             suggestion={state.suggestion}
-            onGenerate={onGeneratePowerBIVisuals}
           />
         )}
         <ChatPanel
