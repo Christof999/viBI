@@ -3,7 +3,7 @@
 // even when no Fabric/Custom MCP is connected.
 
 import { existsSync } from "node:fs";
-import { applyFullPageHTML, readMetadata } from "./pbip.js";
+import { applyFullPageHTML, applyNativePowerBIReport, readMetadata } from "./pbip.js";
 import { loadLibrary, locateProject } from "./library.js";
 import { mcpRegistry } from "./mcp.js";
 import {
@@ -32,6 +32,21 @@ export interface BuiltInTool {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
+}
+
+function arr(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : [];
+}
+
+function looksLikeDateColumn(name: string, dataType?: string): boolean {
+  return (
+    dataType === "dateTime" ||
+    /date|datum|posting|buchungs|period|periode|month|monat|year|jahr/i.test(name)
+  );
+}
+
+function looksLikeKeyColumn(name: string): boolean {
+  return /(^|[_\s-])(id|key|nr|no|code|nummer|number)([_\s-]|$)/i.test(name);
 }
 
 export const builtInTools: BuiltInTool[] = [
@@ -645,6 +660,150 @@ export const builtInTools: BuiltInTool[] = [
             : `3. Measure '${measureName}' (Tabelle '${table}', Anzeige-Ordner '_viBI') als 'Value' des HTML-Visuals binden.`,
         ],
         reloadHint: "PBI Desktop schließen ohne Speichern, dann erneut öffnen.",
+      };
+    },
+  },
+  {
+    name: "create_powerbi_report_visuals",
+    description:
+      "Erstellt native Power-BI-Visuals direkt in report.json: Slicer für Filter, KPI-Karten für Measures, ein Balkendiagramm und eine Tabelle. Vorher list_model nutzen, notwendige Measures/Beziehungen per add_measure/add_relationship anlegen und verify_model ausführen. Dieses Tool bindet echte DAX-Measures/Spalten an die Visuals, keine HTML-Platzhalter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pbipPath: { type: "string" },
+        title: { type: "string", description: "Seitentitel, Default: PowerBI Visuals." },
+        subtitle: { type: "string" },
+        measureNames: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional: gewünschte Measure-Namen. Ohne Angabe werden vorhandene Measures außer 'Dashboard HTML' verwendet.",
+        },
+        slicers: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              table: { type: "string" },
+              column: { type: "string" },
+            },
+          },
+          description:
+            "Optional: Slicer-Spalten. Ohne Angabe wählt viBI Datum-/Jahr-/Monat-Spalten und eine sinnvolle Textdimension.",
+        },
+        category: {
+          type: "object",
+          properties: {
+            table: { type: "string" },
+            column: { type: "string" },
+          },
+          description:
+            "Optional: Kategorie für Balkendiagramm und Tabelle, z.B. Customer[Name] oder Item[Category].",
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+
+      const model = listModel(path);
+      const measureNames = new Set(arr(args.measureNames).map((m) => String(m).toLowerCase()));
+      const allMeasures = model.tables.flatMap((table) =>
+        table.measures.map((measure) => ({ table: table.name, name: measure.name }))
+      );
+      const measures = allMeasures
+        .filter((measure) => measure.name !== "Dashboard HTML")
+        .filter((measure) => measureNames.size === 0 || measureNames.has(measure.name.toLowerCase()))
+        .slice(0, 6);
+
+      if (measures.length === 0) {
+        throw new Error(
+          "Keine passenden Measures gefunden. Lege zuerst KPI-Measures per add_measure an und rufe danach create_powerbi_report_visuals erneut auf."
+        );
+      }
+
+      const tableMap = new Map(model.tables.map((table) => [table.name, table]));
+      const providedSlicers = arr(args.slicers)
+        .map((item) => {
+          const raw = item as { table?: unknown; column?: unknown };
+          const table = str(raw.table);
+          const column = str(raw.column);
+          const col = tableMap.get(table ?? "")?.columns.find((c) => c.name === column);
+          return table && column && col ? { table, column, dataType: col.dataType } : null;
+        })
+        .filter(Boolean) as { table: string; column: string; dataType?: string }[];
+
+      const candidateSlicerColumns = model.tables
+        .flatMap((table) =>
+          table.columns.map((column) => ({
+            table: table.name,
+            column: column.name,
+            dataType: column.dataType,
+            score:
+              (looksLikeDateColumn(column.name, column.dataType) ? 4 : 0) +
+              (column.dataType === "string" ? 2 : 0) -
+              (looksLikeKeyColumn(column.name) ? 2 : 0),
+          }))
+        )
+        .filter((field) => field.score > 0)
+        .sort((a, b) => b.score - a.score);
+      const slicers = (providedSlicers.length ? providedSlicers : candidateSlicerColumns)
+        .filter(
+          (field, index, list) =>
+            list.findIndex((other) => other.table === field.table && other.column === field.column) === index
+        )
+        .slice(0, 3);
+
+      const rawCategory = args.category as { table?: unknown; column?: unknown } | undefined;
+      const categoryTable = str(rawCategory?.table);
+      const categoryColumn = str(rawCategory?.column);
+      const providedCategory =
+        categoryTable && categoryColumn
+          ? tableMap.get(categoryTable)?.columns.find((c) => c.name === categoryColumn)
+          : undefined;
+      const category =
+        providedCategory && categoryTable && categoryColumn
+          ? { table: categoryTable, column: categoryColumn, dataType: providedCategory.dataType }
+          : model.tables
+              .flatMap((table) =>
+                table.columns.map((column) => ({
+                  table: table.name,
+                  column: column.name,
+                  dataType: column.dataType,
+                  score:
+                    (column.dataType === "string" ? 4 : 0) -
+                    (looksLikeKeyColumn(column.name) ? 3 : 0) -
+                    (looksLikeDateColumn(column.name, column.dataType) ? 1 : 0),
+                }))
+              )
+              .filter((field) => field.score > 0)
+              .sort((a, b) => b.score - a.score)[0];
+
+      const reportJsonPath = applyNativePowerBIReport(path, {
+        title: str(args.title) ?? "PowerBI Visuals",
+        subtitle: str(args.subtitle),
+        measures,
+        slicers,
+        category,
+      });
+
+      return {
+        ok: true,
+        reportJsonPath,
+        visuals: {
+          slicers,
+          cards: measures.slice(0, 4),
+          barChart: category ? { category, measure: measures[0] } : null,
+          table: category ? { category, measures: measures.slice(0, 5) } : null,
+        },
+        relationshipCount: model.relationships.length,
+        summary:
+          `✓ Native PowerBI-Visuals in report.json erstellt: ${slicers.length} Slicer, ` +
+          `${Math.min(measures.length, 4)} KPI-Karte(n)` +
+          `${category ? ", Balkendiagramm und Tabelle" : ""}.`,
+        reloadHint:
+          "PBI Desktop schließen ohne Speichern, dann erneut öffnen. Die Visuals sind direkt an die vorhandenen Measures/Spalten gebunden.",
       };
     },
   },

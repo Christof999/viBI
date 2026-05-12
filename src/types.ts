@@ -69,6 +69,7 @@ export interface TableSuggestion {
 export type ModelingStep = "proposal" | "working" | "finalizing";
 
 export type ReportType = "report" | "paginated";
+export type DesignMode = "html" | "powerbi";
 
 export interface CIColors {
   primary: string;
@@ -111,6 +112,7 @@ export interface AppState {
   snippets: HtmlSnippet[];
   modelingStep?: ModelingStep;
   suggestion?: TableSuggestion;
+  designMode?: DesignMode;
   fullPageHtml?: string;
 }
 
