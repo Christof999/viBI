@@ -151,7 +151,7 @@ export default function App() {
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
       `- list_model({pbipPath}): vollständiger TMDL-Zustand inkl. Measures und Beziehungen.\n` +
-      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen. **Standard-Werkzeug für KPIs.**\n` +
+      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?, replace?}): DAX-Measure anlegen. **Standard-Werkzeug für KPIs.** Pflicht: rufe ZUERST list_model auf und prüfe, ob der Name schon vergeben ist. Bei identischem Ausdruck → nicht erneut anlegen (der Helper ist idempotent). Bei abweichendem Ausdruck entweder anderen Namen wählen oder explizit replace=true setzen, sonst lehnt der Helper hart ab (PBI würde sonst „TMDL-Objekte können nicht zusammengeführt werden" werfen).\n` +
       `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle (Date + Year/Quarter/Month/MonthName/YearMonth) anlegen.\n` +
       `- add_calculated_table({pbipPath, name, expression, dataCategory?}): beliebige neue kalkulierte Tabelle anlegen (z.B. SUMMARIZE, DISTINCT). Single-line.\n` +
       `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): calc column hinzufügen.\n` +

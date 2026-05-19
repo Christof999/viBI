@@ -299,7 +299,7 @@ export const builtInTools: BuiltInTool[] = [
   {
     name: "add_measure",
     description:
-      "Fügt ein DAX-Measure zu einer existierenden Tabelle im PBIP-Modell hinzu. Schreibt direkt in die model.tmdl. Der User muss in Power BI Desktop danach das Projekt neu öffnen, damit die Änderung sichtbar wird.",
+      "Fügt ein DAX-Measure zu einer existierenden Tabelle im PBIP-Modell hinzu. RUFE ZUERST list_model AUF und prüfe, ob das Measure schon existiert – PBI lehnt Duplikate hart ab (\"TMDL-Objekte können nicht zusammengeführt werden\"). Der Helper schützt dich: bei identischem Ausdruck idempotent (kein Re-Write), bei anderem Ausdruck Fehler – setze dann replace=true ODER nimm einen anderen Namen.",
     inputSchema: {
       type: "object",
       required: ["table", "name", "expression"],
@@ -317,6 +317,11 @@ export const builtInTools: BuiltInTool[] = [
           description: 'Optional, z.B. "$#,##0.00" oder "0.0%".',
         },
         displayFolder: { type: "string" },
+        replace: {
+          type: "boolean",
+          description:
+            "Wenn true: vorhandene Measure mit gleichem Namen wird vor dem Schreiben ersetzt. Default false. Nur setzen, wenn du den alten Ausdruck wirklich überschreiben willst.",
+        },
       },
     },
     async handler(args) {
@@ -334,10 +339,19 @@ export const builtInTools: BuiltInTool[] = [
         expression,
         formatString: str(args.formatString),
         displayFolder: str(args.displayFolder),
+        replace: args.replace === true,
       });
+      let summary: string;
+      if (r.alreadyExisted) {
+        summary = `↩︎ Measure '${name}' in Tabelle '${table}' existierte bereits mit identischem Ausdruck – nicht erneut geschrieben`;
+      } else if (r.replaced) {
+        summary = `↻ Measure '${name}' in Tabelle '${table}' ersetzt (alter Ausdruck überschrieben)`;
+      } else {
+        summary = `✓ Measure '${name}' in Tabelle '${table}' angelegt`;
+      }
       return {
         ...r,
-        summary: `✓ Measure '${name}' in Tabelle '${table}' angelegt`,
+        summary,
         reloadHint:
           "Power BI Desktop: Datei → Schließen ohne Speichern → erneut öffnen, damit die Änderung geladen wird.",
       };

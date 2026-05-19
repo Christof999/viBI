@@ -530,8 +530,45 @@ export function addMeasure(
     displayFolder?: string;
     replace?: boolean;
   }
-): { ok: true; path: string; replaced?: boolean; removedCount?: number } {
+): { ok: true; path: string; replaced?: boolean; removedCount?: number; alreadyExisted?: boolean } {
   if (isAutoDateTable(args.table)) throw autoDateRefusal(args.table);
+
+  // Konflikt-Check: existiert eine gleichnamige Measure schon? Wenn ja:
+  //   1) identischer Ausdruck → idempotent return (kein Schreiben, kein Duplikat)
+  //   2) anderer Ausdruck + replace=true → alte ersetzen
+  //   3) anderer Ausdruck + replace nicht gesetzt → harter Fehler, sonst
+  //      legt TMDL zwei Measures gleichen Namens an und PBI verweigert.
+  let existing: { name: string; expression: string } | undefined;
+  try {
+    const snapshot = listModel(pbipPath);
+    const tbl = snapshot.tables.find((t) => t.name === args.table);
+    existing = tbl?.measures.find((m) => m.name === args.name);
+  } catch {
+    /* tolerieren – fall-through ohne Pre-Check */
+  }
+
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  if (existing) {
+    if (norm(existing.expression) === norm(args.expression)) {
+      // Idempotent – nichts zu tun
+      return {
+        ok: true,
+        path: findTableFile(pbipPath, args.table)?.filePath ?? pbipPath,
+        alreadyExisted: true,
+      };
+    }
+    if (!args.replace) {
+      throw new Error(
+        `Measure '${args.name}' existiert bereits in Tabelle '${args.table}' mit anderem Ausdruck. ` +
+          `Doppelte Measures lehnt PBI ab ("die TMDL-Objekte können nicht zusammengeführt werden"). ` +
+          `Lösung A: ruf list_model auf, prüfe den vorhandenen Ausdruck – wenn er passt, NICHT erneut anlegen. ` +
+          `Lösung B: rufe add_measure mit replace=true auf, wenn du den alten Ausdruck überschreiben willst. ` +
+          `Lösung C: nimm einen anderen Measure-Namen.\n` +
+          `Vorhandener Ausdruck (gekürzt): ${existing.expression.slice(0, 200)}${existing.expression.length > 200 ? "…" : ""}`
+      );
+    }
+  }
+
   let replaced = false;
   let removedCount = 0;
   if (args.replace) {
