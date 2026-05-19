@@ -99,6 +99,12 @@ export default function App() {
         ? `- Gewählter Designweg: ${state.designMode === "html" ? "HTML" : "PowerBI Visuals"}\n`
         : "") +
       `\nDATENQUELLEN-HINWEIS: Business Central kann eine Quelle sein, ist aber NICHT verbindlich. Im Design- und Visual-Schritt gilt ausschließlich, was list_model/read_pbip_metadata im aktuellen PowerBI-Modell tatsächlich findet. Wenn andere Tabellen vorhanden sind, verwende diese ohne Rückfrage nach Business-Central-Tabellen.\n\n` +
+      `AUTO-DATE-SCHUTZ (sehr wichtig, häufige Fehlerquelle):\n` +
+      `Power BI Desktop legt für jede dateTime-Spalte AUTOMATISCH eine versteckte Tabelle 'LocalDateTable_<guid>' (und einmalig 'DateTableTemplate_<guid>') sowie zugehörige Beziehungen an. Diese erscheinen NICHT in list_model/read_pbip_metadata, weil viBI sie für deine Sicht ausblendet. Konsequenzen:\n` +
+      `  • REFERENZIERE NIE eine LocalDateTable_* oder DateTableTemplate_* in irgendeinem Tool-Aufruf (add_measure, add_relationship, add_calculated_column, remove_relationship, replace_in_html, …). Sie sind PBI-intern und tabu.\n` +
+      `  • Wenn du eine Datums-Dimension brauchst (Beziehung von Sales.Date → Date.Date, Slicer, USERELATIONSHIP etc.), benutze ausschließlich die viBI-eigene Tabelle 'Date'.\n` +
+      `  • Falls ein Tool-Aufruf eine Auto-Date-Tabelle berührt, lehnt der Helper hart ab mit einem Fehler. Lies die Fehlermeldung und versuche es mit der echten Tabelle erneut.\n` +
+      `  • fix_ambiguous_relationships, restore_tmdl_backup und remove_relationship lassen Auto-Date-Beziehungen unangetastet – das ist Absicht und nicht zu umgehen.\n\n` +
       (state.phase === "design" && state.designMode === "html"
         ? `DESIGN-PHASE-FOKUS:\n` +
           HTML_INTERFACE_DESIGN_GUIDE +

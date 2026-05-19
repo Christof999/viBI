@@ -99,14 +99,20 @@ export function readLiveModel(): LiveModelResult {
               : m.expression ?? "",
           })),
         }));
-      const relationships: LiveRelationship[] = (model.relationships ?? []).map((r) => ({
-        name: r.name ?? "",
-        fromTable: r.fromTable ?? "",
-        fromColumn: r.fromColumn ?? "",
-        toTable: r.toTable ?? "",
-        toColumn: r.toColumn ?? "",
-        isActive: r.isActive,
-      }));
+      const isAutoDate = (name: string) =>
+        name.startsWith("LocalDateTable") || name.startsWith("DateTableTemplate");
+      const relationships: LiveRelationship[] = (model.relationships ?? [])
+        .filter(
+          (r) => !isAutoDate(r.fromTable ?? "") && !isAutoDate(r.toTable ?? "")
+        )
+        .map((r) => ({
+          name: r.name ?? "",
+          fromTable: r.fromTable ?? "",
+          fromColumn: r.fromColumn ?? "",
+          toTable: r.toTable ?? "",
+          toColumn: r.toColumn ?? "",
+          isActive: r.isActive,
+        }));
       // Skipping the empty/unloaded workspaces (only system tables, no user data)
       if (tables.length === 0) continue;
       return {

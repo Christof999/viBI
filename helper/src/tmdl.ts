@@ -88,6 +88,43 @@ function joinBlock(lines: string[]): string {
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Auto-Date-Schutz
+// ---------------------------------------------------------------------------
+// Power BI Desktop legt für jede dateTime-Spalte automatisch eine versteckte
+// Tabelle (LocalDateTable_<guid>) plus zugehörige Beziehung an. Diese Objekte
+// sind Modell-intern und dürfen NIEMALS von viBI modifiziert, gelöscht oder
+// deaktiviert werden – sonst kollabieren die "Variation"-Properties auf den
+// User-Date-Columns und PBI verweigert das Öffnen.
+//
+// Alle Schreib-, Lösch- und Reparatur-Pfade nutzen diese Helfer, um Auto-Date-
+// Objekte hart auszuschließen.
+
+export function isAutoDateTable(tableName: string): boolean {
+  return (
+    tableName.startsWith("LocalDateTable_") ||
+    tableName.startsWith("DateTableTemplate_") ||
+    tableName.startsWith("LocalDateTable ") ||
+    tableName.startsWith("DateTableTemplate ")
+  );
+}
+
+export function isAutoDateRelationship(r: {
+  fromTable: string;
+  toTable: string;
+}): boolean {
+  return isAutoDateTable(r.fromTable) || isAutoDateTable(r.toTable);
+}
+
+function autoDateRefusal(tableName: string): Error {
+  return new Error(
+    `Tabelle '${tableName}' ist eine Auto-Date-System-Tabelle (von Power BI versteckt erzeugt). ` +
+      `viBI ändert sie NIE – sonst zerbrechen die Variation-Properties der dateTime-Spalten und ` +
+      `PBI Desktop verweigert das Öffnen. Wenn du eine Datums-Dimension brauchst, nutze die ` +
+      `viBI-eigene Tabelle 'Date'.`
+  );
+}
+
 export interface ListedTable {
   name: string;
   columns: { name: string; dataType: string }[];
@@ -373,6 +410,7 @@ export function removeMeasure(
   tableName: string,
   measureName: string
 ): { ok: boolean; path: string; removedCount: number } {
+  if (isAutoDateTable(tableName)) throw autoDateRefusal(tableName);
   const file = findTableFile(pbipPath, tableName);
   if (!file) return { ok: false, path: pbipPath, removedCount: 0 };
 
@@ -493,6 +531,7 @@ export function addMeasure(
     replace?: boolean;
   }
 ): { ok: true; path: string; replaced?: boolean; removedCount?: number } {
+  if (isAutoDateTable(args.table)) throw autoDateRefusal(args.table);
   let replaced = false;
   let removedCount = 0;
   if (args.replace) {
@@ -579,6 +618,11 @@ export function addRelationship(
   forcedInactive?: boolean;
   forcedInactiveBecauseOf?: string;
 } {
+  // Auto-Date-Schutz: niemals eine Beziehung zu/von einer LocalDateTable_*
+  // oder DateTableTemplate_* anlegen. PBI verwaltet die selbst.
+  if (isAutoDateTable(args.fromTable)) throw autoDateRefusal(args.fromTable);
+  if (isAutoDateTable(args.toTable)) throw autoDateRefusal(args.toTable);
+
   // Spaltenexistenz validieren – verhindert die häufigste Fehlerklasse:
   // KI halluziniert Spaltennamen (z.B. "OrderID" wo die echte Spalte
   // "[id]" oder "Order Number" heißt). Die Beziehung würde sonst stumm
@@ -770,12 +814,30 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   let deactivated = 0;
   let removed = 0;
   let brokenRemoved = 0;
+  let autoDateSkipped = 0;
+
+  // Auto-Date-Beziehungen sind UNTOUCHABLE. PBI Desktop verwaltet sie selbst
+  // und erwartet, dass sie genau so bleiben wie hingelegt – sonst krachen die
+  // Variation-Properties beim Reload.
+  const userRelationships = model.relationships.filter((r) => {
+    if (isAutoDateRelationship(r)) {
+      autoDateSkipped++;
+      return false;
+    }
+    return true;
+  });
+  if (autoDateSkipped > 0) {
+    log.push(
+      `🛡 ${autoDateSkipped} Auto-Date-Beziehung(en) (LocalDateTable_*/DateTableTemplate_*) übersprungen – PBI verwaltet sie selbst`
+    );
+  }
 
   // Schritt 0: Orphaned Beziehungen finden (referenzieren nicht-existente
   // Tabellen oder Spalten). Diese werden komplett entfernt.
+  // ABER nur unter User-Beziehungen – Auto-Date bleibt unangetastet.
   const tableMap = new Map(model.tables.map((t) => [t.name, t]));
   const orphaned: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     const fromT = tableMap.get(r.fromTable);
     const toT = tableMap.get(r.toTable);
     const fromOk = fromT && fromT.columns.some((c) => c.name === r.fromColumn);
@@ -787,7 +849,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   // unter den Beziehungen, die noch nicht als orphaned markiert sind.
   const seenPair = new Map<string, ListedRelationship>();
   const exactDups: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     if (orphaned.includes(r)) continue;
     const key = [
       [r.fromTable, r.fromColumn].join("|"),
@@ -802,7 +864,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   // Schritt 2: pro Tabellenpaar zweite-und-weitere active → inactive
   const activePerPair = new Map<string, ListedRelationship>();
   const toDeactivate: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     if (orphaned.includes(r) || exactDups.includes(r)) continue;
     if (!r.isActive) continue;
     const tablesKey = [r.fromTable, r.toTable].sort().join("=");
@@ -813,17 +875,16 @@ export function fixAmbiguousRelationships(pbipPath: string): {
     }
   }
 
-  // Schritt 2b: aktive indirekte Mehrfachpfade finden. Beispiel:
-  // A -> B -> C und zusätzlich A -> C. Power BI meldet dann oft
-  // "ambiguous path", obwohl es keine zweite direkte Beziehung zwischen
-  // demselben Tabellenpaar gibt.
+  // Schritt 2b: aktive indirekte Mehrfachpfade finden. WICHTIG: Auto-Date-
+  // Beziehungen müssen aus dem Graphen ausgeschlossen werden, damit sie
+  // keine Phantom-Pfade produzieren (z.B. Sales -> LocalDateTable_xyz -> Date).
   const blockedIds = new Set([
     ...orphaned.map((r) => r.id),
     ...exactDups.map((r) => r.id),
     ...toDeactivate.map((r) => r.id),
   ]);
   const pathConflicts = findActiveRelationshipPathConflicts(
-    model.relationships.filter((r) => !blockedIds.has(r.id))
+    userRelationships.filter((r) => !blockedIds.has(r.id))
   );
   const graphDeactivate = pathConflicts.map((c) => c.relationship);
   const deactivateIds = new Set<string>();
@@ -906,6 +967,7 @@ export function addCalculatedColumn(
     summarizeBy?: "none" | "sum" | "average" | "count" | "max" | "min";
   }
 ): { ok: true; path: string } {
+  if (isAutoDateTable(args.table)) throw autoDateRefusal(args.table);
   const file = findTableFile(pbipPath, args.table);
   if (!file) {
     let availableTables = "(unbekannt)";
@@ -949,6 +1011,7 @@ export function addCalculatedTable(
     dataCategory?: "Time" | "Regular";
   }
 ): { ok: true; path: string; tableName: string } {
+  if (isAutoDateTable(args.name)) throw autoDateRefusal(args.name);
   if (findTableFile(pbipPath, args.name)) {
     throw new Error(`Tabelle '${args.name}' existiert bereits.`);
   }
@@ -991,6 +1054,7 @@ export function addDateTable(
   args?: { name?: string; startDate?: string; endDate?: string }
 ): { ok: true; path: string; tableName: string } {
   const name = args?.name ?? "Date";
+  if (isAutoDateTable(name)) throw autoDateRefusal(name);
   const start = args?.startDate ?? "DATE(2020,1,1)";
   const end = args?.endDate ?? "DATE(2030,12,31)";
 
@@ -1085,10 +1149,29 @@ table '${name}'
   };
 }
 
-export function removeRelationship(pbipPath: string, id: string): { ok: boolean; path: string } {
+export function removeRelationship(pbipPath: string, id: string): { ok: boolean; path: string; refusedAutoDate?: boolean } {
   const d = discoverModel(pbipPath);
   if (d.layout === "none" || d.layout === "bim") {
     return { ok: false, path: d.definitionDir };
+  }
+  // Auto-Date-Schutz: vor dem Löschen prüfen, ob die Beziehung eine
+  // LocalDateTable_* / DateTableTemplate_* involviert. Wenn ja, lehnen wir
+  // hart ab, damit nicht versehentlich Variation-Properties verwaisen.
+  try {
+    const model = listModel(pbipPath);
+    const target = model.relationships.find((r) => r.id === id);
+    if (target && isAutoDateRelationship(target)) {
+      throw new Error(
+        `Beziehung ${id} (${target.fromTable}.${target.fromColumn} → ${target.toTable}.${target.toColumn}) ` +
+          `verbindet eine Auto-Date-System-Tabelle. viBI löscht diese NICHT, weil sonst die ` +
+          `'Variation'-Eigenschaft der dateTime-Spalte ins Leere zeigt und PBI Desktop den Bericht ` +
+          `nicht mehr öffnen kann.`
+      );
+    }
+  } catch (e) {
+    // Wenn der Auto-Date-Check failt (z.B. listModel-Fehler), trotzdem den
+    // expliziten Refusal-Fehler durchreichen; andere Fehler sind tolerierbar.
+    if ((e as Error).message?.includes("Auto-Date")) throw e;
   }
   const re = new RegExp(
     `(?:^|\\n)relationship\\s+${escapeRegex(id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
