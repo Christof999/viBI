@@ -26,12 +26,22 @@ const CORS_ORIGIN =
 const PBI_DESKTOP_CANDIDATES = [
   "C:/Program Files/Microsoft Power BI Desktop/bin/PBIDesktop.exe",
   "C:/Program Files (x86)/Microsoft Power BI Desktop/bin/PBIDesktop.exe",
+  // Windows-Store / per-user installation paths
+  `${process.env.LOCALAPPDATA ?? "C:/Users/Default/AppData/Local"}/Microsoft/WindowsApps/PBIDesktopStore.exe`,
+  `${process.env.LOCALAPPDATA ?? "C:/Users/Default/AppData/Local"}/Microsoft/WindowsApps/PBIDesktop.exe`,
+  `${process.env.LOCALAPPDATA ?? "C:/Users/Default/AppData/Local"}/Microsoft/Power BI Desktop/bin/PBIDesktop.exe`,
 ];
 const PBI_DESKTOP_PATH = process.env.POWERBI_DESKTOP_PATH;
 
 function findPowerBIDesktop(): string | null {
   if (PBI_DESKTOP_PATH && existsSync(PBI_DESKTOP_PATH)) return PBI_DESKTOP_PATH;
-  for (const p of PBI_DESKTOP_CANDIDATES) if (existsSync(p)) return p;
+  for (const p of PBI_DESKTOP_CANDIDATES) {
+    try {
+      if (existsSync(p)) return p;
+    } catch {
+      /* ignore */
+    }
+  }
   return null;
 }
 
@@ -72,20 +82,69 @@ app.get("/status", (_req, res) => {
 });
 
 app.post("/powerbi/open", (req, res) => {
-  const exe = findPowerBIDesktop();
-  if (!exe) {
+  const filePath = (req.body?.filePath as string | undefined) ?? undefined;
+
+  // Wenn ein Datei-Pfad mitgegeben wird, prüfe ihn vorher – wenn er nicht
+  // existiert, gleich klare Fehlermeldung statt PBI mit leerem Doc starten.
+  if (filePath && !existsSync(filePath)) {
     res.status(404).json({
       ok: false,
-      error:
-        "PowerBI Desktop nicht gefunden. POWERBI_DESKTOP_PATH als Env setzen oder PowerBI Desktop installieren.",
+      error: `PBIP-Datei nicht gefunden: ${filePath}`,
     });
     return;
   }
-  const filePath = (req.body?.filePath as string | undefined) ?? undefined;
-  const args = filePath ? [filePath] : [];
-  const child = spawn(exe, args, { detached: true, stdio: "ignore" });
-  child.unref();
-  res.json({ ok: true });
+
+  const exe = findPowerBIDesktop();
+  let mode: "exe" | "shell" = "exe";
+  let opened = false;
+  const errors: string[] = [];
+
+  // Primär: direkt mit PBIDesktop.exe öffnen, falls gefunden.
+  if (exe) {
+    try {
+      const args = filePath ? [filePath] : [];
+      const child = spawn(exe, args, { detached: true, stdio: "ignore" });
+      child.unref();
+      opened = true;
+    } catch (e) {
+      errors.push(`exe-spawn: ${(e as Error).message}`);
+    }
+  } else {
+    errors.push(
+      "PBIDesktop.exe nicht in den Standard-Pfaden gefunden (PROGRAMFILES, LOCALAPPDATA/WindowsApps)."
+    );
+  }
+
+  // Fallback: Windows-Shell-Assoziation. .pbip-Dateien sind beim Installieren
+  // von PBI Desktop mit PBIDesktop verknüpft – `start "" "<datei>"` öffnet
+  // sie unabhängig davon, wo die exe wirklich liegt (auch Microsoft-Store).
+  if (!opened && process.platform === "win32" && filePath) {
+    try {
+      const child = spawn("cmd.exe", ["/c", "start", "", filePath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref();
+      opened = true;
+      mode = "shell";
+    } catch (e) {
+      errors.push(`shell-start: ${(e as Error).message}`);
+    }
+  }
+
+  if (!opened) {
+    res.status(500).json({
+      ok: false,
+      error:
+        "PowerBI Desktop konnte nicht gestartet werden. " +
+        "Versuche POWERBI_DESKTOP_PATH als Env-Variable auf den vollen Pfad zur PBIDesktop.exe zu setzen " +
+        "und den Helper neu zu starten. Details: " +
+        errors.join(" | "),
+    });
+    return;
+  }
+  res.json({ ok: true, mode, exe: exe ?? null });
 });
 
 app.post("/powerbi/close", (_req, res) => {

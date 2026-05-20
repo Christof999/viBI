@@ -231,10 +231,23 @@ export default function App() {
         phase: "modeling",
         modelingStep: "proposal",
       }));
+      // Power BI Desktop automatisch öffnen. Fehler nicht mehr stumm
+      // verschlucken – sonst wundert sich der User, warum nichts passiert.
       try {
-        await helper.openPowerBIDesktop(r.path);
-      } catch {
-        /* user can open manually */
+        const openRes = await helper.openPowerBIDesktop(r.path);
+        if (!openRes?.ok) {
+          chat.seedAssistant(
+            `⚠ Konnte Power BI Desktop nicht automatisch öffnen. Bitte starte PBI Desktop manuell und öffne dort die Datei:\n\n${r.path}`
+          );
+        }
+      } catch (e) {
+        chat.seedAssistant(
+          `⚠ Konnte Power BI Desktop nicht automatisch öffnen (${(e as Error).message}).\n\n` +
+            `Wahrscheinliche Ursachen:\n` +
+            `• PBI Desktop ist nicht installiert oder die exe liegt an einem nicht-Standard-Pfad → setze beim Helper-Start die Umgebungsvariable POWERBI_DESKTOP_PATH auf die volle PBIDesktop.exe.\n` +
+            `• Helper läuft nicht oder /powerbi/open ist blockiert.\n\n` +
+            `Datei manuell öffnen: ${r.path}`
+        );
       }
     } catch (e) {
       alert(
