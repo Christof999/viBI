@@ -4,6 +4,7 @@
 
 import { existsSync } from "node:fs";
 import { applyFullPageHTML, applyNativePowerBIReport, readMetadata } from "./pbip.js";
+import { addPbirPage, type PbirFieldProjection, type PbirVisualSpec } from "./pbir.js";
 import { loadLibrary, locateProject } from "./library.js";
 import { mcpRegistry } from "./mcp.js";
 import {
@@ -679,9 +680,208 @@ export const builtInTools: BuiltInTool[] = [
     },
   },
   {
+    name: "add_powerbi_page",
+    description:
+      "EMPFOHLEN für native PowerBI-Visuals (PBIR sharded format nach SKILL.md). Legt eine neue Page mit beliebig vielen Visuals an als 'definition/pages/pg##<Name>/page.json' + 'visuals/v##<Name>/visual.json'. Schema-Version wird aus existierenden visual.json discovered, Page-Nummer auto-incrementiert. Tabellen/Spalten/Measures werden gegen list_model VALIDIERT – Fehler bei Phantom-Referenzen.",
+    inputSchema: {
+      type: "object",
+      required: ["displayName", "visuals"],
+      properties: {
+        pbipPath: { type: "string" },
+        displayName: { type: "string", description: "Anzeigename der Page, z.B. 'Sales Overview'." },
+        width: { type: "number", description: "Canvas-Breite (default 1280)." },
+        height: { type: "number", description: "Canvas-Höhe (default 720)." },
+        displayOption: { type: "string", enum: ["FitToPage", "FitToWidth", "ActualSize"] },
+        pageType: { type: "string", enum: ["Standard", "Drillthrough", "Tooltip"] },
+        visuals: {
+          type: "array",
+          description:
+            "Liste der Visuals auf dieser Page. Jedes Visual ist EIN Diagramm/Karte/Tabelle/Slicer. Reihenfolge bestimmt v01, v02, …",
+          items: {
+            type: "object",
+            required: ["baseName", "visualType", "position", "queryState"],
+            properties: {
+              baseName: {
+                type: "string",
+                description: "Sprechender Name, z.B. 'KpiTotalSales' → wird zu v##KpiTotalSales.",
+              },
+              visualType: {
+                type: "string",
+                description:
+                  "z.B. cardVisual, clusteredColumnChart, clusteredBarChart, lineChart, lineClusteredColumnComboChart, tableEx, pivotTable, slicer, donutChart, pieChart.",
+              },
+              position: {
+                type: "object",
+                required: ["x", "y", "width", "height"],
+                properties: {
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  width: { type: "number" },
+                  height: { type: "number" },
+                  z: { type: "number" },
+                  tabOrder: { type: "number" },
+                },
+              },
+              queryState: {
+                type: "object",
+                description:
+                  "Map QueryRole → [{ kind:'measure'|'column', table, name }]. Roles je nach visualType: cardVisual→Data/ReferenceLabels/AdditionalMeasure, clusteredColumnChart/clusteredBarChart/lineChart→Category/Y, comboChart→Category/ColumnY/LineY, tableEx→Values, pivotTable→Rows/Columns/Values, slicer→Values, donutChart/pieChart→Category/Y.",
+                additionalProperties: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["kind", "table", "name"],
+                    properties: {
+                      kind: { type: "string", enum: ["measure", "column"] },
+                      table: { type: "string" },
+                      name: { type: "string" },
+                    },
+                  },
+                },
+              },
+              objects: {
+                type: "object",
+                description:
+                  "Optional: native PBIR objects-Block für Formatierung (z.B. calloutValue, cards, referenceLabel). Wird verbatim übernommen.",
+              },
+              drillFilterOtherVisuals: { type: "boolean" },
+            },
+          },
+        },
+      },
+    },
+    async handler(args) {
+      const path = str(args.pbipPath);
+      if (!path) throw new Error("pbipPath erforderlich");
+      if (!existsSync(path)) throw new Error(`PBIP nicht gefunden: ${path}`);
+      const displayName = str(args.displayName);
+      if (!displayName) throw new Error("displayName erforderlich");
+
+      // Modell für Validierung holen – Phantom-Referenzen sofort blocken
+      // (gleiche Mechanik wie addRelationship).
+      const model = listModel(path);
+      const tableMap = new Map(
+        model.tables.map((t) => [
+          t.name,
+          {
+            columns: new Set(t.columns.map((c) => c.name)),
+            measures: new Set(t.measures.map((m) => m.name)),
+          },
+        ])
+      );
+
+      const visualsIn = arr(args.visuals) as Array<{
+        baseName?: string;
+        visualType?: string;
+        position?: { x?: number; y?: number; width?: number; height?: number; z?: number; tabOrder?: number };
+        queryState?: Record<string, Array<{ kind?: string; table?: string; name?: string }>>;
+        objects?: Record<string, unknown>;
+        drillFilterOtherVisuals?: boolean;
+      }>;
+      if (visualsIn.length === 0) throw new Error("Mindestens ein Visual erforderlich");
+
+      const specs: PbirVisualSpec[] = [];
+      const validationErrors: string[] = [];
+      visualsIn.forEach((v, vi) => {
+        const base = str(v.baseName);
+        const vt = str(v.visualType);
+        const pos = v.position ?? {};
+        if (!base || !vt) {
+          validationErrors.push(`Visual #${vi + 1}: baseName und visualType erforderlich`);
+          return;
+        }
+        if (typeof pos.x !== "number" || typeof pos.y !== "number" || typeof pos.width !== "number" || typeof pos.height !== "number") {
+          validationErrors.push(`Visual #${vi + 1} '${base}': position.x/y/width/height (Zahlen) erforderlich`);
+          return;
+        }
+        const queryState: Record<string, PbirFieldProjection[]> = {};
+        for (const [role, projs] of Object.entries(v.queryState ?? {})) {
+          const items: PbirFieldProjection[] = [];
+          (projs ?? []).forEach((p, pi) => {
+            const kind = str(p?.kind);
+            const table = str(p?.table);
+            const name = str(p?.name);
+            if (!table || !name || (kind !== "measure" && kind !== "column")) {
+              validationErrors.push(
+                `Visual '${base}' role '${role}' #${pi + 1}: kind ('measure'|'column'), table, name erforderlich`
+              );
+              return;
+            }
+            const tbl = tableMap.get(table);
+            if (!tbl) {
+              validationErrors.push(
+                `Visual '${base}' role '${role}': Tabelle '${table}' nicht im Modell. Vorhandene: ${[...tableMap.keys()].join(", ") || "(keine)"}`
+              );
+              return;
+            }
+            const pool = kind === "measure" ? tbl.measures : tbl.columns;
+            if (!pool.has(name)) {
+              validationErrors.push(
+                `Visual '${base}' role '${role}': ${kind} '${table}'.'${name}' existiert nicht. ` +
+                  `Vorhandene ${kind}s in '${table}': ${[...pool].slice(0, 12).join(", ") || "(keine)"}`
+              );
+              return;
+            }
+            items.push({ kind, table, name });
+          });
+          queryState[role] = items;
+        }
+        specs.push({
+          baseName: base,
+          visualType: vt,
+          position: {
+            x: pos.x as number,
+            y: pos.y as number,
+            width: pos.width as number,
+            height: pos.height as number,
+            z: typeof pos.z === "number" ? pos.z : undefined,
+            tabOrder: typeof pos.tabOrder === "number" ? pos.tabOrder : undefined,
+          },
+          queryState,
+          objects: v.objects,
+          drillFilterOtherVisuals: v.drillFilterOtherVisuals,
+        });
+      });
+
+      if (validationErrors.length > 0) {
+        throw new Error(
+          `Visual-Validierung fehlgeschlagen (Phantom-Tabellen oder -Spalten):\n - ${validationErrors.join("\n - ")}\n\n` +
+            `Ruf list_model auf und übergib NUR echte Tabellen-/Measure-/Spalten-Namen.`
+        );
+      }
+
+      const result = addPbirPage({
+        pbipPath: path,
+        displayName,
+        width: typeof args.width === "number" ? args.width : undefined,
+        height: typeof args.height === "number" ? args.height : undefined,
+        displayOption: str(args.displayOption) as "FitToPage" | "FitToWidth" | "ActualSize" | undefined,
+        pageType: str(args.pageType) as "Standard" | "Drillthrough" | "Tooltip" | undefined,
+        visuals: specs,
+      });
+
+      return {
+        ok: true,
+        pageFolder: result.pageFolder,
+        pageNumber: result.pageNumber,
+        pageJsonPath: result.pageJsonPath,
+        visualPaths: result.visualPaths,
+        schemaUsed: result.schemaUsed,
+        summary: `✓ Page '${result.pageFolder}' angelegt mit ${result.visualPaths.length} Visual(s) (Schema ${result.schemaUsed.split("/").slice(-3, -1).join("/")})`,
+        reloadHint:
+          "Power BI Desktop schließen und das PBIP-Projekt erneut öffnen. Die neue Page erscheint mit allen Visuals.",
+        userInstructions: [
+          "PBI Desktop schließen (kein Save).",
+          "Das PBIP wieder öffnen – die neue Page wird automatisch in den Tabs angezeigt.",
+          "Wenn etwas nicht stimmt: in viBI restore_tmdl_backup für das Modell, oder die geschriebene Page einfach im Datei-Explorer löschen (Ordner pages/" + result.pageFolder + ").",
+        ],
+      };
+    },
+  },
+  {
     name: "create_powerbi_report_visuals",
     description:
-      "Erstellt native Power-BI-Visuals direkt in report.json: Slicer für Filter, KPI-Karten für Measures, ein Balkendiagramm und eine Tabelle. Vorher list_model nutzen, notwendige Measures/Beziehungen per add_measure/add_relationship anlegen und verify_model ausführen. Dieses Tool bindet echte DAX-Measures/Spalten an die Visuals, keine HTML-Platzhalter.",
+      "DEPRECATED: schreibt eine komplette neue report.json (überschreibt alles bestehende). Bevorzugt add_powerbi_page nutzen, das nach SKILL.md-Konvention pages/pg##/visuals/v##/visual.json schreibt ohne report.json anzufassen.",
     inputSchema: {
       type: "object",
       properties: {
