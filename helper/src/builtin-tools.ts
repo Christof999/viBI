@@ -725,19 +725,15 @@ export const builtInTools: BuiltInTool[] = [
               queryState: {
                 type: "object",
                 description:
-                  "Map QueryRole → [{ kind:'measure'|'column', table, name }]. Roles je nach visualType: cardVisual→Data/ReferenceLabels/AdditionalMeasure, clusteredColumnChart/clusteredBarChart/lineChart→Category/Y, comboChart→Category/ColumnY/LineY, tableEx→Values, pivotTable→Rows/Columns/Values, slicer→Values, donutChart/pieChart→Category/Y.",
-                additionalProperties: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    required: ["kind", "table", "name"],
-                    properties: {
-                      kind: { type: "string", enum: ["measure", "column"] },
-                      table: { type: "string" },
-                      name: { type: "string" },
-                    },
-                  },
-                },
+                  "Map QueryRole → Array von Projektionen. Jeder Wert ist eine Array von Objekten mit {kind:'measure'|'column', table:string, name:string}. " +
+                  "Roles je nach visualType: cardVisual → Data, ReferenceLabels, AdditionalMeasure. " +
+                  "clusteredColumnChart/clusteredBarChart/lineChart → Category, Y (optional Series, Tooltips). " +
+                  "lineClusteredColumnComboChart → Category, ColumnY, LineY. " +
+                  "tableEx → Values (alle Spalten als Projektionen). " +
+                  "pivotTable → Rows, Columns, Values. " +
+                  "slicer → Values. " +
+                  "donutChart/pieChart → Category, Y. " +
+                  "Beispiel cardVisual: {\"Data\":[{\"kind\":\"measure\",\"table\":\"Date\",\"name\":\"Gesamtumsatz\"}]}.",
               },
               objects: {
                 type: "object",
