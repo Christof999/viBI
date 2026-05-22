@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { DesignPanel } from "./components/DesignPanel";
+import { DesignModeChoice } from "./components/DesignModeChoice";
 import { Header } from "./components/Header";
 import { LibraryScreen } from "./components/Library";
 import { ModelingPanel } from "./components/ModelingPanel";
 import { Onboarding } from "./components/Onboarding";
+import { PowerBIVisualPanel } from "./components/PowerBIVisualPanel";
 import { TableProposal } from "./components/TableProposal";
 import { useChat } from "./hooks/useChat";
 import { helper } from "./lib/helperClient";
@@ -12,6 +14,7 @@ import { buildFullPageReport } from "./lib/snippets";
 import { loadState, resetState, saveState } from "./lib/storage";
 import type {
   AppState,
+  DesignMode,
   HelperStatus,
   LibraryProject,
   MCPTool,
@@ -22,6 +25,14 @@ import type {
 const DEFAULT_TARGET_DIR =
   (import.meta.env.VITE_DEFAULT_PBIP_DIR as string | undefined) ??
   "C:\\PowerBI\\viBI";
+
+const HTML_INTERFACE_DESIGN_GUIDE =
+  `INTERFACE-DESIGN-GUIDE FÜR HTML-DASHBOARDS (nach https://github.com/Dammyjay93/interface-design/blob/main/.claude/skills/interface-design/SKILL.md):\n` +
+  `Baue keine generischen KPI-Kachel-Templates. Vor jedem großen HTML-Update musst du intern klären: Wer ist der konkrete Mensch, was muss er erledigen, wie soll es sich anfühlen?\n` +
+  `Erkunde Domain, Farbwelt, Signature-Element und Defaults: mindestens 5 Domainbegriffe, 5 passende Farben aus der realen Produktwelt, ein wiedererkennbares Signature-Element und 3 Standard-Dashboard-Muster, die du bewusst ersetzt.\n` +
+  `Jede Entscheidung braucht einen Grund: Layout, Farbtemperatur, Typografie, Spacing, Informationshierarchie. Wenn die Antwort nur "clean" oder "modern" ist, ist es zu generisch.\n` +
+  `Nutze Design-Tokens mit sprechenden Namen, vier Text-Hierarchien, eine konsistente Spacing-Skala, subtile Layer statt harter Linien, klare Zustände und tabellarische Zahlen. Karten, Tabellen und Charts sollen jeweils für ihren Inhalt gestaltet sein, nicht als austauschbares Raster.\n` +
+  `Vor dem Speichern prüfst du Swap-Test, Squint-Test, Signature-Test und Token-Test. Wenn der Entwurf ohne Produktname nicht erkennbar wäre, iteriere zuerst.\n\n`;
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
@@ -64,7 +75,11 @@ export default function App() {
     }
     const phaseLabel =
       state.phase === "design"
-        ? "DESIGN (HTML-Layout der Berichtsseite)"
+        ? state.designMode === "powerbi"
+          ? "DESIGN (native PowerBI Visuals)"
+          : state.designMode === "html"
+          ? "DESIGN (HTML-Layout der Berichtsseite)"
+          : "DESIGN (Auswahl HTML oder PowerBI Visuals)"
         : state.phase === "modeling"
         ? "DATENMODELL (Tabellen, Beziehungen, Measures, DAX)"
         : state.phase;
@@ -80,9 +95,19 @@ export default function App() {
             .map((t) => t.name)
             .join(", ")}\n`
         : "") +
-      `\nMETA: Alle Niederlassungen nutzen Microsoft Dynamics 365 Business Central als ERP.\n\n` +
-      (state.phase === "design"
+      (state.designMode
+        ? `- Gewählter Designweg: ${state.designMode === "html" ? "HTML" : "PowerBI Visuals"}\n`
+        : "") +
+      `\nDATENQUELLEN-HINWEIS: Business Central kann eine Quelle sein, ist aber NICHT verbindlich. Im Design- und Visual-Schritt gilt ausschließlich, was list_model/read_pbip_metadata im aktuellen PowerBI-Modell tatsächlich findet. Wenn andere Tabellen vorhanden sind, verwende diese ohne Rückfrage nach Business-Central-Tabellen.\n\n` +
+      `AUTO-DATE-SCHUTZ (sehr wichtig, häufige Fehlerquelle):\n` +
+      `Power BI Desktop legt für jede dateTime-Spalte AUTOMATISCH eine versteckte Tabelle 'LocalDateTable_<guid>' (und einmalig 'DateTableTemplate_<guid>') sowie zugehörige Beziehungen an. Diese erscheinen NICHT in list_model/read_pbip_metadata, weil viBI sie für deine Sicht ausblendet. Konsequenzen:\n` +
+      `  • REFERENZIERE NIE eine LocalDateTable_* oder DateTableTemplate_* in irgendeinem Tool-Aufruf (add_measure, add_relationship, add_calculated_column, remove_relationship, replace_in_html, …). Sie sind PBI-intern und tabu.\n` +
+      `  • Wenn du eine Datums-Dimension brauchst (Beziehung von Sales.Date → Date.Date, Slicer, USERELATIONSHIP etc.), benutze ausschließlich die viBI-eigene Tabelle 'Date'.\n` +
+      `  • Falls ein Tool-Aufruf eine Auto-Date-Tabelle berührt, lehnt der Helper hart ab mit einem Fehler. Lies die Fehlermeldung und versuche es mit der echten Tabelle erneut.\n` +
+      `  • fix_ambiguous_relationships, restore_tmdl_backup und remove_relationship lassen Auto-Date-Beziehungen unangetastet – das ist Absicht und nicht zu umgehen.\n\n` +
+      (state.phase === "design" && state.designMode === "html"
         ? `DESIGN-PHASE-FOKUS:\n` +
+          HTML_INTERFACE_DESIGN_GUIDE +
           `Du bist NICHT mehr in der Modellierung. KEINE add_relationship / add_calculated_*-TMDL-Tools mehr aufrufen, außer der User fragt explizit nach DAX/Beziehungen. ` +
           `Das Layout der Berichtsseite ist ein einzelnes vollständiges HTML-Dokument, das in Power BI über das 'HTML Content'-Custom-Visual von https://html-content.com gerendert wird. Es lebt im Helper als .vibi-design.html.\n\n` +
           `LIVE-WERTE im HTML (sehr wichtig):\n` +
@@ -111,15 +136,28 @@ export default function App() {
           `3. Live-Vorschau im DesignPanel polled jede 1.5s den Helper – Änderung wird automatisch sichtbar.\n\n` +
           `WICHTIG für update_full_page_html: Niemals halbe Snippets zurückliefern. Das HTML muss IMMER ein vollständiges Dokument mit <html><head><style>...</style></head><body>...</body></html> sein. Inline-CSS bevorzugen. Keine externen Bilder, keine externen Fonts (außer Web-Safe Stack), keine fetch-Aufrufe – das Visual läuft im sandboxed iframe ohne Netz.\n\n`
         : "") +
+      (state.phase === "design" && state.designMode === "powerbi"
+        ? `POWERBI-VISUALS-PHASE-FOKUS:\n` +
+          `Du erstellst KEIN HTML und nutzt keine HTML-Content-Visuals. Ziel ist ein nativer PowerBI-Bericht mit Slicern, Beziehungen, Measures und direkt gebundenen Standard-Visuals.\n\n` +
+          `Verbindliche Regeln:\n` +
+          `1. Immer zuerst list_model aufrufen. Keine Tabellen- oder Spaltennamen erfinden. Die Tabellen aus list_model sind die Wahrheit, auch wenn sie von früheren Vorschlägen oder Business-Central-Beispielen abweichen.\n` +
+          `2. Wenn list_model nutzbare Tabellen/Spalten enthält, arbeite damit weiter. Bitte den User NICHT, Business-Central-Tabellen zu laden, nur weil erwartete Namen fehlen.\n` +
+          `3. Filter werden ausschließlich als Slicer umgesetzt. Wähle aus vorhandenen Datums-, Jahr/Monat-, Status-, Kategorie-, Kunden-, Artikel- oder Regionsspalten sinnvolle Slicer oder übergib sie an create_powerbi_report_visuals.\n` +
+          `4. Beziehungen zwischen Tabellen müssen hergestellt werden, wenn mehrere Tabellen für KPIs/Filter/Visuals zusammenwirken. Nutze add_relationship nur mit echten Spalten aus list_model und vermeide Duplikate. WICHTIG: Vermeide auch indirekte Mehrfachpfade (z.B. A→B→C plus A→C). Wenn verify_model activePathConflicts meldet oder PBI PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH zeigt, sofort fix_ambiguous_relationships aufrufen und danach verify_model erneut.\n` +
+          `5. Visuals müssen direkt im Bericht landen. **Bevorzugt add_powerbi_page** (PBIR sharded format nach SKILL.md): legt eine neue Page als 'definition/pages/pg##<Name>/page.json' an und je Visual ein 'visuals/v##<Name>/visual.json'. Du übergibst eine Liste an Visuals mit baseName, visualType (cardVisual, clusteredColumnChart, lineChart, lineClusteredColumnComboChart, tableEx, pivotTable, slicer, donutChart, …), Position (x/y/width/height/z/tabOrder) und queryState (Role → [{kind:'measure'|'column', table, name}]). Position-Grid für 1280x720: 4 KPIs oben (y=80, h=130, x=30/330/630/930, w=280), 2x2-Visuals (y=230 und y=480, h=230, x=30/650, w=600). Z-Order: Header 500-999, KPIs 1000-1099, Hauptvisuals 2000-2099. NUR wenn der User report.json komplett neu rendern lassen will, das legacy create_powerbi_report_visuals nutzen.\n` +
+          `   IBCS-Variance-Visuals (wenn der User „IBCS", „Plan vs. Ist", „AC vs. PY" sagt): Farben IBCS-konform (Actual #0C3549, Comparison #CCCCCC, Positiv #44C088, Negativ #ED7373). Default-Variante: lineClusteredColumnComboChart für Zeitreihen, clusteredBarChart für Rankings, pivotTable mit SVG-Measures für Tabellen.\n` +
+          `6. verify_model nach add_measure/add_relationship aufrufen. Wenn verify_model Probleme meldet, nicht einfach weiterdesignen, sondern korrigieren oder klar melden.\n` +
+          `7. Nach Schreib-Tools immer den Reload-Hinweis nennen: PBI Desktop schließen ohne Speichern, dann erneut öffnen.\n\n`
+        : "") +
       `VERFÜGBARE TOOLS (server="helper"):\n` +
       `- read_pbip_metadata({pbipPath}): kurze Tabellen-/Spalten-Übersicht.\n` +
       `- list_model({pbipPath}): vollständiger TMDL-Zustand inkl. Measures und Beziehungen.\n` +
-      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?}): DAX-Measure anlegen. **Standard-Werkzeug für KPIs.**\n` +
+      `- add_measure({pbipPath, table, name, expression, formatString?, displayFolder?, replace?}): DAX-Measure anlegen. **Standard-Werkzeug für KPIs.** Pflicht: rufe ZUERST list_model auf und prüfe, ob der Name schon vergeben ist. Bei identischem Ausdruck → nicht erneut anlegen (der Helper ist idempotent). Bei abweichendem Ausdruck entweder anderen Namen wählen oder explizit replace=true setzen, sonst lehnt der Helper hart ab (PBI würde sonst „TMDL-Objekte können nicht zusammengeführt werden" werfen).\n` +
       `- add_date_table({pbipPath, name?, startDate?, endDate?}): kalkulierte Datumstabelle (Date + Year/Quarter/Month/MonthName/YearMonth) anlegen.\n` +
       `- add_calculated_table({pbipPath, name, expression, dataCategory?}): beliebige neue kalkulierte Tabelle anlegen (z.B. SUMMARIZE, DISTINCT). Single-line.\n` +
       `- add_calculated_column({pbipPath, table, name, expression, dataType?, formatString?, summarizeBy?}): calc column hinzufügen.\n` +
       `- add_relationship({...}) / remove_relationship({pbipPath, id}): NUR auf explizite User-Anforderung. Standard-Workflow legt KEINE Beziehungen an, weil das HTML-Dashboard ohne sie auskommt und sie die häufigste Fehlerquelle sind.\n` +
-      `- fix_ambiguous_relationships({pbipPath}): Recovery-Tool – entfernt Duplikate, deaktiviert mehrfach-aktive Beziehungen.\n` +
+      `- fix_ambiguous_relationships({pbipPath}): Recovery-Tool – entfernt Duplikate, deaktiviert mehrfach-aktive Beziehungen und bricht aktive Alternativpfade/Zyklen (A→B→C plus A→C) auf.\n` +
       `- restore_tmdl_backup({pbipPath}): Recovery-Tool – stellt den Stand vor der letzten viBI-Änderung wieder her.\n` +
       `- locate_pbip({name?}): Bibliotheks-Suche.\n` +
       `- get_full_page_html({pbipPath}): aktuelles Design-HTML lesen (Design-Phase).\n` +
@@ -127,6 +165,8 @@ export default function App() {
       `- update_full_page_html({pbipPath, html}): komplettes Design-HTML neu schreiben (für große Layout-Umbauten).\n` +
       `- embed_full_page_html({pbipPath, html?}): Measure schreiben + Visual auf Seite 1 platzieren.\n` +
       `- apply_full_page_html({pbipPath, html}): Alias zu embed_full_page_html.\n` +
+      `- add_powerbi_page({pbipPath, displayName, width?, height?, visuals:[{baseName, visualType, position, queryState, objects?}]}): **EMPFOHLENES Werkzeug für native Visuals.** Schreibt PBIR sharded (pg##/visuals/v##/visual.json) wie SKILL.md vorgibt. Schema wird aus existierender visual.json discovered, Page-Nummer auto-inkrementiert, Tabellen/Spalten/Measures werden vor dem Schreiben gegen list_model validiert (Phantom-Refs → Fehler mit Vorschlagsliste).\n` +
+      `- create_powerbi_report_visuals({pbipPath, title?, measureNames?, slicers?, category?}): DEPRECATED – schreibt komplette report.json neu und überschreibt User-Anpassungen. Nur als Notfall-Fallback.\n` +
       `- run_fabric_modeling: nur falls Fabric-MCP verbunden, sonst die obigen Tools verwenden.\n\n` +
       `WICHTIG: Wenn der User „modelliere" oder „verbinde dich mit dem Bericht" sagt, RUFE DIE TOOLS DIREKT AUF. Behaupte NIE, du könntest das nicht. ` +
       `Nach Schreib-Tools (add_*) erwähnst du im Antworttext den reloadHint aus dem Tool-Resultat (PBI Desktop neu öffnen).\n\n` +
@@ -136,9 +176,11 @@ export default function App() {
       `MODELLIERUNGS-REIHENFOLGE (verbindlich):\n` +
       `1. Zuerst IMMER list_model aufrufen. Erfinde NIE Spaltennamen – nimm sie 1:1 aus list_model.tables[].columns[].name.\n` +
       `2. add_date_table NUR wenn list_model keine Tabelle namens 'Date' enthält. Frische viBI-Projekte haben bereits eine.\n` +
-      `3. Pro KPI EIN add_measure aufrufen. Der DAX-Ausdruck soll AUF EINE TABELLE bezogen sein (SUM(Sales[Quantity]), AVERAGE(Customer[Score]) etc.). Cross-table-Logik (RELATED, USERELATIONSHIP) NICHT verwenden.\n` +
-      `4. KEINE add_relationship-Aufrufe! Hintergrund: Das spätere HTML-Dashboard rendert seine Werte über das Measure-HTML, nicht über Power-BI-Joins. Tabellen-Beziehungen sind für den Dashboard-Output IRRELEVANT und nur eine Fehlerquelle (mehrdeutige Pfade, fehlende Spalten, kaputte Variations). Wenn der User explizit „lege Beziehung X→Y an" sagt, dann – und nur dann – darfst du add_relationship benutzen. Sonst nicht.\n` +
-      `5. NACH ALLEN SCHREIB-TOOLS: verify_model mit expectedTables und expectedMeasures aufrufen (expectedRelationships leer lassen).\n` +
+      `3. Pro KPI EIN add_measure aufrufen. Der DAX-Ausdruck soll AUF EINE TABELLE bezogen sein, außer der PowerBI-Visuals-Pfad verlangt eine sauber verifizierte Beziehung.\n` +
+      (state.designMode === "powerbi"
+        ? `4. Für native PowerBI Visuals: fehlende Beziehungen per add_relationship herstellen und in verify_model als expectedRelationships prüfen. Wenn verify_model ambiguousPaths oder activePathConflicts meldet, fix_ambiguous_relationships ausführen und erneut verifizieren, bevor Visuals erstellt werden.\n`
+        : `4. Im HTML-Pfad KEINE add_relationship-Aufrufe, außer der User fragt explizit nach Beziehungen. Das HTML-Dashboard rendert Werte über Measure-Strings.\n`) +
+      `5. NACH ALLEN SCHREIB-TOOLS: verify_model mit expectedTables, expectedMeasures und – im PowerBI-Visuals-Pfad – expectedRelationships aufrufen.\n` +
       `6. AM ENDE eine kurze deutsche Bullet-Antwort: welche Measures angelegt (mit Formel), Reload-Hinweis (Datei→schließen ohne Speichern→erneut öffnen). Kein Kommentar = User denkt du hängst.\n\n` +
       `BEZIEHUNGS-RECOVERY-WERKZEUGE (nur falls explizit angefragt oder Bericht beschädigt): add_relationship, remove_relationship, fix_ambiguous_relationships, restore_tmdl_backup. Wenn der User berichtet, dass PBI Desktop beim Öffnen einen Fehler wirft (Variation-Pfad / mehrdeutige Beziehungen / TMDL-Format), rufe SOFORT restore_tmdl_backup auf.`;
     chat.setExtraSystemPrompt(ctx);
@@ -148,7 +190,7 @@ export default function App() {
       kpis: state.project.kpis,
       tables: state.suggestion?.tables.map((t) => t.name),
     });
-  }, [state.project, state.suggestion, state.pbipPath, state.phase]);
+  }, [state.project, state.suggestion, state.pbipPath, state.phase, state.designMode]);
 
   // First boot: route to library if helper has projects
   useEffect(() => {
@@ -191,10 +233,23 @@ export default function App() {
         phase: "modeling",
         modelingStep: "proposal",
       }));
+      // Power BI Desktop automatisch öffnen. Fehler nicht mehr stumm
+      // verschlucken – sonst wundert sich der User, warum nichts passiert.
       try {
-        await helper.openPowerBIDesktop(r.path);
-      } catch {
-        /* user can open manually */
+        const openRes = await helper.openPowerBIDesktop(r.path);
+        if (!openRes?.ok) {
+          chat.seedAssistant(
+            `⚠ Konnte Power BI Desktop nicht automatisch öffnen. Bitte starte PBI Desktop manuell und öffne dort die Datei:\n\n${r.path}`
+          );
+        }
+      } catch (e) {
+        chat.seedAssistant(
+          `⚠ Konnte Power BI Desktop nicht automatisch öffnen (${(e as Error).message}).\n\n` +
+            `Wahrscheinliche Ursachen:\n` +
+            `• PBI Desktop ist nicht installiert oder die exe liegt an einem nicht-Standard-Pfad → setze beim Helper-Start die Umgebungsvariable POWERBI_DESKTOP_PATH auf die volle PBIDesktop.exe.\n` +
+            `• Helper läuft nicht oder /powerbi/open ist blockiert.\n\n` +
+            `Datei manuell öffnen: ${r.path}`
+        );
       }
     } catch (e) {
       alert(
@@ -215,28 +270,24 @@ export default function App() {
   const onAcceptTables = async (suggestion: TableSuggestion) => {
     if (!state.project) return;
     setState((s) => ({ ...s, suggestion, modelingStep: "working" }));
-    // Chat-getriebene Modellierung. WICHTIG: Da das spätere HTML-Dashboard
-    // ein gerendertes HTML-Visual ist (Werte hartkodiert in der DAX-Measure),
-    // brauchen wir KEINE Tabellen-Beziehungen im Modell. Skipping
-    // add_relationship eliminiert die häufigste Fehlerklasse
-    // (PFE_XL_USERELATIONSHIP_AMBIGUOUS_PATH, broken column refs,
-    // variation-orphans). Falls der User später echte cross-table-DAX braucht,
-    // kann er Beziehungen explizit anlegen.
+    // Chat-getriebene Basismodellierung: zuerst Measures stabil anlegen.
+    // Beziehungen werden im PowerBI-Visuals-Pfad nach der Designweg-Auswahl
+    // gezielt ergänzt und verifiziert; HTML-Dashboards brauchen sie nicht.
     const tableLine = suggestion.tables
       .map((t) => `${t.name} (${t.keyColumns.join(", ")})`)
       .join("\n - ");
     const kpiLine = state.project.kpis.length
       ? state.project.kpis.join(", ")
-      : "(keine konkreten KPIs angegeben – schlage typische BC-KPIs vor)";
+      : "(keine konkreten KPIs angegeben – nutze sinnvolle Kennzahlen aus dem tatsächlich geladenen Modell)";
     chat.send(
       `Modelliere jetzt den Bericht „${state.project.name}" für mich. Ziel: ${state.project.goal}\n\n` +
         `Geladene Tabellen:\n - ${tableLine}\n\n` +
         `Geplante KPIs: ${kpiLine}\n\n` +
         `Schritte:\n` +
         `1. list_model aufrufen, um den aktuellen TMDL-Zustand zu sehen.\n` +
-        `2. Pro KPI ein passendes DAX-Measure via add_measure anlegen. Der Ausdruck soll PER TABELLE aggregieren (z.B. SUM(Sales[Quantity]), AVERAGE(Customer[CreditLimit])) – KEINE cross-table-Aggregation, denn wir legen KEINE Beziehungen an. displayFolder: "Measures".\n` +
-        `3. KEINE add_relationship-Aufrufe! Das HTML-Dashboard rendert seine Werte direkt über die Measure-Strings, nicht über Modell-Joins. Beziehungen wären nur Fehlerquellen.\n` +
-        `4. verify_model NUR mit expectedMeasures aufrufen (Beziehungen sind irrelevant).\n` +
+        `2. Pro KPI ein passendes DAX-Measure via add_measure anlegen. Der Ausdruck soll erst einmal PER TABELLE aggregieren (z.B. SUM(Sales[Quantity]), AVERAGE(Customer[CreditLimit])). displayFolder: "Measures".\n` +
+        `3. Beziehungen jetzt nur anlegen, wenn sie eindeutig aus list_model hervorgehen. Spätestens im späteren PowerBI-Visuals-Pfad werden fehlende Beziehungen gezielt ergänzt und verifiziert.\n` +
+        `4. verify_model mit expectedMeasures aufrufen; expectedRelationships nur setzen, wenn du wirklich Beziehungen angelegt hast.\n` +
         `5. Am Ende eine kurze deutsche Zusammenfassung: welche Measures angelegt, ein Bullet pro Measure mit Name + Formel, plus Reload-Hinweis (Datei→schließen ohne Speichern→neu öffnen).`
     );
   };
@@ -270,28 +321,14 @@ export default function App() {
           /* user may have closed already */
         }
       }
-      // Aktuellen Stand bevorzugen, falls schon mal designed wurde
-      const html = state.fullPageHtml ?? buildFullPageReport(state.project);
-      // Initial-HTML in den Helper schreiben, damit AI und Frontend ab
-      // sofort denselben State sehen
-      if (state.pbipPath) {
-        try {
-          await helper.saveDesignHtml(state.pbipPath, html);
-        } catch {
-          /* helper offline – DesignPanel pusht später erneut */
-        }
-      }
       setState((s) => ({
         ...s,
         phase: "design",
-        fullPageHtml: html,
+        designMode: undefined,
       }));
-      // KI explizit über den Phasenwechsel informieren – sonst weiß sie nichts davon
       chat.seedAssistant(
         `Datenmodellierung ist abgeschlossen. Ich bin jetzt in **Phase 2: Design**.\n\n` +
-          `Der Bericht „${state.project.name}" hat bereits ein Initial-HTML (page-fillendes Design mit Header, KPI-Karten, Bar-Chart, Top-Tabelle). ` +
-          `Ich kann das jetzt für dich anpassen – sag mir einfach was du willst (Farben, Layout, KPIs auf andere Werte mappen, …).\n\n` +
-          `Tools die ich in dieser Phase nutze: get_full_page_html (aktuellen Stand lesen), update_full_page_html (deine Änderung im Live-Preview anzeigen), embed_full_page_html (in den PBI-Bericht einbetten).`
+          `Bitte wähle links den Designweg: **Über HTML erstellen** für ein frei gestaltetes Dashboard oder **PowerBI Visuals** für native Slicer, Beziehungen und direkt gebundene Bericht-Visuals.`
       );
     } finally {
       setBusy(false);
@@ -300,6 +337,30 @@ export default function App() {
 
   const setFullPageHtml = (html: string) =>
     setState((s) => ({ ...s, fullPageHtml: html }));
+
+  const onSelectDesignMode = async (designMode: DesignMode) => {
+    if (!state.project) return;
+    if (designMode === "html") {
+      const html = state.fullPageHtml ?? buildFullPageReport(state.project);
+      if (state.pbipPath) {
+        try {
+          await helper.saveDesignHtml(state.pbipPath, html);
+        } catch {
+          /* helper offline – DesignPanel pusht später erneut */
+        }
+      }
+      setState((s) => ({ ...s, designMode, fullPageHtml: html }));
+      chat.seedAssistant(
+        `HTML-Designweg gewählt. Ich nutze jetzt den Interface-Design-Leitfaden: erst Domain/Farbwelt/Signature/Defaults prüfen, dann ein vollständiges HTML-Dokument mit dynamischen {{Measure}}-Platzhaltern gestalten.`
+      );
+      return;
+    }
+
+    setState((s) => ({ ...s, designMode }));
+    chat.seedAssistant(
+      `PowerBI-Visuals gewählt. Ich erstelle kein HTML, sondern arbeite mit list_model, add_measure, add_relationship, verify_model und create_powerbi_report_visuals. Filter werden als Slicer umgesetzt.`
+    );
+  };
 
   const openLibraryProject = (p: LibraryProject) => {
     const project: ProjectConfig = {
@@ -318,6 +379,7 @@ export default function App() {
       pbipPath: p.pbipPath,
       libraryId: p.id,
       snippets: [],
+      designMode: undefined,
     });
   };
 
@@ -329,6 +391,7 @@ export default function App() {
       project: undefined,
       modelingStep: undefined,
       suggestion: undefined,
+      designMode: undefined,
       fullPageHtml: undefined,
     });
 
@@ -411,12 +474,22 @@ export default function App() {
               busy={busy}
             />
           )}
-        {state.phase === "design" && (
+        {state.phase === "design" && !state.designMode && (
+          <DesignModeChoice project={state.project} onSelect={onSelectDesignMode} />
+        )}
+        {state.phase === "design" && state.designMode === "html" && (
           <DesignPanel
             project={state.project}
             pbipPath={state.pbipPath}
             html={state.fullPageHtml ?? buildFullPageReport(state.project)}
             onChange={setFullPageHtml}
+          />
+        )}
+        {state.phase === "design" && state.designMode === "powerbi" && (
+          <PowerBIVisualPanel
+            project={state.project}
+            pbipPath={state.pbipPath}
+            suggestion={state.suggestion}
           />
         )}
         <ChatPanel

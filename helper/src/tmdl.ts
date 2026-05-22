@@ -88,6 +88,43 @@ function joinBlock(lines: string[]): string {
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Auto-Date-Schutz
+// ---------------------------------------------------------------------------
+// Power BI Desktop legt für jede dateTime-Spalte automatisch eine versteckte
+// Tabelle (LocalDateTable_<guid>) plus zugehörige Beziehung an. Diese Objekte
+// sind Modell-intern und dürfen NIEMALS von viBI modifiziert, gelöscht oder
+// deaktiviert werden – sonst kollabieren die "Variation"-Properties auf den
+// User-Date-Columns und PBI verweigert das Öffnen.
+//
+// Alle Schreib-, Lösch- und Reparatur-Pfade nutzen diese Helfer, um Auto-Date-
+// Objekte hart auszuschließen.
+
+export function isAutoDateTable(tableName: string): boolean {
+  return (
+    tableName.startsWith("LocalDateTable_") ||
+    tableName.startsWith("DateTableTemplate_") ||
+    tableName.startsWith("LocalDateTable ") ||
+    tableName.startsWith("DateTableTemplate ")
+  );
+}
+
+export function isAutoDateRelationship(r: {
+  fromTable: string;
+  toTable: string;
+}): boolean {
+  return isAutoDateTable(r.fromTable) || isAutoDateTable(r.toTable);
+}
+
+function autoDateRefusal(tableName: string): Error {
+  return new Error(
+    `Tabelle '${tableName}' ist eine Auto-Date-System-Tabelle (von Power BI versteckt erzeugt). ` +
+      `viBI ändert sie NIE – sonst zerbrechen die Variation-Properties der dateTime-Spalten und ` +
+      `PBI Desktop verweigert das Öffnen. Wenn du eine Datums-Dimension brauchst, nutze die ` +
+      `viBI-eigene Tabelle 'Date'.`
+  );
+}
+
 export interface ListedTable {
   name: string;
   columns: { name: string; dataType: string }[];
@@ -100,6 +137,113 @@ export interface ListedRelationship {
   toTable: string;
   toColumn: string;
   isActive: boolean;
+}
+export interface ActiveRelationshipPathConflict {
+  relationship: ListedRelationship;
+  alternativePath: string[];
+  reason: string;
+}
+
+class TableDisjointSet {
+  private parent = new Map<string, string>();
+
+  find(x: string): string {
+    if (!this.parent.has(x)) this.parent.set(x, x);
+    const p = this.parent.get(x)!;
+    if (p === x) return x;
+    const root = this.find(p);
+    this.parent.set(x, root);
+    return root;
+  }
+
+  union(a: string, b: string): boolean {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return false;
+    this.parent.set(rb, ra);
+    return true;
+  }
+}
+
+function relationshipKeepScore(r: ListedRelationship): number {
+  let score = 0;
+  // Power BI auto-detection often creates the redundant direct edge that causes
+  // ambiguity. Prefer keeping explicit/user-created relationships when a cycle
+  // must be broken.
+  if (!/^AutoDetected_/i.test(r.id)) score += 50;
+  if (r.fromTable === "Date" || r.toTable === "Date") score += 15;
+  if (/date|datum/i.test(r.fromColumn) || /date|datum/i.test(r.toColumn)) score += 5;
+  if (/id|key|code|no|nr|number|nummer/i.test(r.fromColumn)) score += 3;
+  if (/id|key|code|no|nr|number|nummer/i.test(r.toColumn)) score += 3;
+  return score;
+}
+
+function relationshipLabel(r: ListedRelationship): string {
+  return `${r.fromTable}.${r.fromColumn}→${r.toTable}.${r.toColumn}`;
+}
+
+function findAlternativeTablePath(
+  kept: ListedRelationship[],
+  fromTable: string,
+  toTable: string
+): string[] {
+  const graph = new Map<string, { next: string; label: string }[]>();
+  for (const r of kept) {
+    const label = relationshipLabel(r);
+    if (!graph.has(r.fromTable)) graph.set(r.fromTable, []);
+    if (!graph.has(r.toTable)) graph.set(r.toTable, []);
+    graph.get(r.fromTable)!.push({ next: r.toTable, label });
+    graph.get(r.toTable)!.push({ next: r.fromTable, label });
+  }
+
+  const queue: { table: string; path: string[] }[] = [{ table: fromTable, path: [] }];
+  const seen = new Set<string>([fromTable]);
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.table === toTable) return cur.path;
+    for (const edge of graph.get(cur.table) ?? []) {
+      if (seen.has(edge.next)) continue;
+      seen.add(edge.next);
+      queue.push({ table: edge.next, path: [...cur.path, edge.label] });
+    }
+  }
+  return [];
+}
+
+export function findActiveRelationshipPathConflicts(
+  relationships: ListedRelationship[]
+): ActiveRelationshipPathConflict[] {
+  const active = relationships.filter((r) => r.isActive);
+  const ordered = active
+    .map((relationship, index) => ({ relationship, index }))
+    .sort((a, b) => {
+      const scoreDelta = relationshipKeepScore(b.relationship) - relationshipKeepScore(a.relationship);
+      return scoreDelta || a.index - b.index;
+    });
+
+  const dsu = new TableDisjointSet();
+  const kept: ListedRelationship[] = [];
+  const conflicts: ActiveRelationshipPathConflict[] = [];
+  for (const { relationship } of ordered) {
+    if (dsu.union(relationship.fromTable, relationship.toTable)) {
+      kept.push(relationship);
+      continue;
+    }
+    const alternativePath = findAlternativeTablePath(
+      kept,
+      relationship.fromTable,
+      relationship.toTable
+    );
+    conflicts.push({
+      relationship,
+      alternativePath,
+      reason:
+        alternativePath.length > 0
+          ? `Aktiver Alternativpfad existiert: ${alternativePath.join(" -> ")}`
+          : "Aktiver Beziehungszyklus erkannt.",
+    });
+  }
+  return conflicts;
 }
 
 export function listModel(pbipPath: string): {
@@ -266,6 +410,7 @@ export function removeMeasure(
   tableName: string,
   measureName: string
 ): { ok: boolean; path: string; removedCount: number } {
+  if (isAutoDateTable(tableName)) throw autoDateRefusal(tableName);
   const file = findTableFile(pbipPath, tableName);
   if (!file) return { ok: false, path: pbipPath, removedCount: 0 };
 
@@ -385,7 +530,45 @@ export function addMeasure(
     displayFolder?: string;
     replace?: boolean;
   }
-): { ok: true; path: string; replaced?: boolean; removedCount?: number } {
+): { ok: true; path: string; replaced?: boolean; removedCount?: number; alreadyExisted?: boolean } {
+  if (isAutoDateTable(args.table)) throw autoDateRefusal(args.table);
+
+  // Konflikt-Check: existiert eine gleichnamige Measure schon? Wenn ja:
+  //   1) identischer Ausdruck → idempotent return (kein Schreiben, kein Duplikat)
+  //   2) anderer Ausdruck + replace=true → alte ersetzen
+  //   3) anderer Ausdruck + replace nicht gesetzt → harter Fehler, sonst
+  //      legt TMDL zwei Measures gleichen Namens an und PBI verweigert.
+  let existing: { name: string; expression: string } | undefined;
+  try {
+    const snapshot = listModel(pbipPath);
+    const tbl = snapshot.tables.find((t) => t.name === args.table);
+    existing = tbl?.measures.find((m) => m.name === args.name);
+  } catch {
+    /* tolerieren – fall-through ohne Pre-Check */
+  }
+
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  if (existing) {
+    if (norm(existing.expression) === norm(args.expression)) {
+      // Idempotent – nichts zu tun
+      return {
+        ok: true,
+        path: findTableFile(pbipPath, args.table)?.filePath ?? pbipPath,
+        alreadyExisted: true,
+      };
+    }
+    if (!args.replace) {
+      throw new Error(
+        `Measure '${args.name}' existiert bereits in Tabelle '${args.table}' mit anderem Ausdruck. ` +
+          `Doppelte Measures lehnt PBI ab ("die TMDL-Objekte können nicht zusammengeführt werden"). ` +
+          `Lösung A: ruf list_model auf, prüfe den vorhandenen Ausdruck – wenn er passt, NICHT erneut anlegen. ` +
+          `Lösung B: rufe add_measure mit replace=true auf, wenn du den alten Ausdruck überschreiben willst. ` +
+          `Lösung C: nimm einen anderen Measure-Namen.\n` +
+          `Vorhandener Ausdruck (gekürzt): ${existing.expression.slice(0, 200)}${existing.expression.length > 200 ? "…" : ""}`
+      );
+    }
+  }
+
   let replaced = false;
   let removedCount = 0;
   if (args.replace) {
@@ -472,6 +655,11 @@ export function addRelationship(
   forcedInactive?: boolean;
   forcedInactiveBecauseOf?: string;
 } {
+  // Auto-Date-Schutz: niemals eine Beziehung zu/von einer LocalDateTable_*
+  // oder DateTableTemplate_* anlegen. PBI verwaltet die selbst.
+  if (isAutoDateTable(args.fromTable)) throw autoDateRefusal(args.fromTable);
+  if (isAutoDateTable(args.toTable)) throw autoDateRefusal(args.toTable);
+
   // Spaltenexistenz validieren – verhindert die häufigste Fehlerklasse:
   // KI halluziniert Spaltennamen (z.B. "OrderID" wo die echte Spalte
   // "[id]" oder "Order Number" heißt). Die Beziehung würde sonst stumm
@@ -663,12 +851,30 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   let deactivated = 0;
   let removed = 0;
   let brokenRemoved = 0;
+  let autoDateSkipped = 0;
+
+  // Auto-Date-Beziehungen sind UNTOUCHABLE. PBI Desktop verwaltet sie selbst
+  // und erwartet, dass sie genau so bleiben wie hingelegt – sonst krachen die
+  // Variation-Properties beim Reload.
+  const userRelationships = model.relationships.filter((r) => {
+    if (isAutoDateRelationship(r)) {
+      autoDateSkipped++;
+      return false;
+    }
+    return true;
+  });
+  if (autoDateSkipped > 0) {
+    log.push(
+      `🛡 ${autoDateSkipped} Auto-Date-Beziehung(en) (LocalDateTable_*/DateTableTemplate_*) übersprungen – PBI verwaltet sie selbst`
+    );
+  }
 
   // Schritt 0: Orphaned Beziehungen finden (referenzieren nicht-existente
   // Tabellen oder Spalten). Diese werden komplett entfernt.
+  // ABER nur unter User-Beziehungen – Auto-Date bleibt unangetastet.
   const tableMap = new Map(model.tables.map((t) => [t.name, t]));
   const orphaned: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     const fromT = tableMap.get(r.fromTable);
     const toT = tableMap.get(r.toTable);
     const fromOk = fromT && fromT.columns.some((c) => c.name === r.fromColumn);
@@ -680,7 +886,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   // unter den Beziehungen, die noch nicht als orphaned markiert sind.
   const seenPair = new Map<string, ListedRelationship>();
   const exactDups: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     if (orphaned.includes(r)) continue;
     const key = [
       [r.fromTable, r.fromColumn].join("|"),
@@ -695,7 +901,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
   // Schritt 2: pro Tabellenpaar zweite-und-weitere active → inactive
   const activePerPair = new Map<string, ListedRelationship>();
   const toDeactivate: ListedRelationship[] = [];
-  for (const r of model.relationships) {
+  for (const r of userRelationships) {
     if (orphaned.includes(r) || exactDups.includes(r)) continue;
     if (!r.isActive) continue;
     const tablesKey = [r.fromTable, r.toTable].sort().join("=");
@@ -705,6 +911,25 @@ export function fixAmbiguousRelationships(pbipPath: string): {
       activePerPair.set(tablesKey, r);
     }
   }
+
+  // Schritt 2b: aktive indirekte Mehrfachpfade finden. WICHTIG: Auto-Date-
+  // Beziehungen müssen aus dem Graphen ausgeschlossen werden, damit sie
+  // keine Phantom-Pfade produzieren (z.B. Sales -> LocalDateTable_xyz -> Date).
+  const blockedIds = new Set([
+    ...orphaned.map((r) => r.id),
+    ...exactDups.map((r) => r.id),
+    ...toDeactivate.map((r) => r.id),
+  ]);
+  const pathConflicts = findActiveRelationshipPathConflicts(
+    userRelationships.filter((r) => !blockedIds.has(r.id))
+  );
+  const graphDeactivate = pathConflicts.map((c) => c.relationship);
+  const deactivateIds = new Set<string>();
+  const deactivatePlan = [...toDeactivate, ...graphDeactivate].filter((r) => {
+    if (deactivateIds.has(r.id)) return false;
+    deactivateIds.add(r.id);
+    return true;
+  });
 
   // Schritt 3: alle betroffenen TMDL-Dateien anpassen
   for (const f of d.files) {
@@ -736,7 +961,7 @@ export function fixAmbiguousRelationships(pbipPath: string): {
         changed = true;
       }
     }
-    for (const inact of toDeactivate) {
+    for (const inact of deactivatePlan) {
       // Block des Relationships finden, isActive: false hinzufügen falls noch nicht da
       const re = new RegExp(
         `((?:^|\\n)relationship\\s+${escapeRegex(inact.id)}[\\s\\S]*?)(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,
@@ -744,8 +969,11 @@ export function fixAmbiguousRelationships(pbipPath: string): {
       );
       content = content.replace(re, (block) => {
         if (/isActive:\s*false/.test(block)) return block;
+        const pathConflict = pathConflicts.find((c) => c.relationship.id === inact.id);
         log.push(
-          `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (zweite Beziehung zwischen ${inact.fromTable} und ${inact.toTable})`
+          pathConflict
+            ? `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (${pathConflict.reason})`
+            : `⚠ ${inact.fromTable}.${inact.fromColumn} → ${inact.toTable}.${inact.toColumn} auf inactive gesetzt (zweite Beziehung zwischen ${inact.fromTable} und ${inact.toTable})`
         );
         deactivated++;
         changed = true;
@@ -776,6 +1004,7 @@ export function addCalculatedColumn(
     summarizeBy?: "none" | "sum" | "average" | "count" | "max" | "min";
   }
 ): { ok: true; path: string } {
+  if (isAutoDateTable(args.table)) throw autoDateRefusal(args.table);
   const file = findTableFile(pbipPath, args.table);
   if (!file) {
     let availableTables = "(unbekannt)";
@@ -819,6 +1048,7 @@ export function addCalculatedTable(
     dataCategory?: "Time" | "Regular";
   }
 ): { ok: true; path: string; tableName: string } {
+  if (isAutoDateTable(args.name)) throw autoDateRefusal(args.name);
   if (findTableFile(pbipPath, args.name)) {
     throw new Error(`Tabelle '${args.name}' existiert bereits.`);
   }
@@ -861,6 +1091,7 @@ export function addDateTable(
   args?: { name?: string; startDate?: string; endDate?: string }
 ): { ok: true; path: string; tableName: string } {
   const name = args?.name ?? "Date";
+  if (isAutoDateTable(name)) throw autoDateRefusal(name);
   const start = args?.startDate ?? "DATE(2020,1,1)";
   const end = args?.endDate ?? "DATE(2030,12,31)";
 
@@ -955,10 +1186,29 @@ table '${name}'
   };
 }
 
-export function removeRelationship(pbipPath: string, id: string): { ok: boolean; path: string } {
+export function removeRelationship(pbipPath: string, id: string): { ok: boolean; path: string; refusedAutoDate?: boolean } {
   const d = discoverModel(pbipPath);
   if (d.layout === "none" || d.layout === "bim") {
     return { ok: false, path: d.definitionDir };
+  }
+  // Auto-Date-Schutz: vor dem Löschen prüfen, ob die Beziehung eine
+  // LocalDateTable_* / DateTableTemplate_* involviert. Wenn ja, lehnen wir
+  // hart ab, damit nicht versehentlich Variation-Properties verwaisen.
+  try {
+    const model = listModel(pbipPath);
+    const target = model.relationships.find((r) => r.id === id);
+    if (target && isAutoDateRelationship(target)) {
+      throw new Error(
+        `Beziehung ${id} (${target.fromTable}.${target.fromColumn} → ${target.toTable}.${target.toColumn}) ` +
+          `verbindet eine Auto-Date-System-Tabelle. viBI löscht diese NICHT, weil sonst die ` +
+          `'Variation'-Eigenschaft der dateTime-Spalte ins Leere zeigt und PBI Desktop den Bericht ` +
+          `nicht mehr öffnen kann.`
+      );
+    }
+  } catch (e) {
+    // Wenn der Auto-Date-Check failt (z.B. listModel-Fehler), trotzdem den
+    // expliziten Refusal-Fehler durchreichen; andere Fehler sind tolerierbar.
+    if ((e as Error).message?.includes("Auto-Date")) throw e;
   }
   const re = new RegExp(
     `(?:^|\\n)relationship\\s+${escapeRegex(id)}[\\s\\S]*?(?=\\n(?:model|table|relationship|role|perspective|expression|dataSource|annotation)\\b|\\s*$)`,

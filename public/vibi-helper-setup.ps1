@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $REPO   = "https://github.com/christof999/vibi.git"
 $ROOT   = Join-Path $env:USERPROFILE ".vibi-helper"
 $PORT   = 7321
+$BRANCH = if ($env:VIBI_HELPER_BRANCH) { $env:VIBI_HELPER_BRANCH } else { "" }
 
 Write-Host ""
 Write-Host "viBI Helper Setup" -ForegroundColor Yellow
@@ -42,7 +43,27 @@ if (-not (Test-Path $ROOT)) {
 } else {
     Write-Host ("Aktualisiere bestehendes Repo unter {0} ..." -f $ROOT)
     Push-Location $ROOT
-    try { git pull --ff-only } catch { Write-Host "git pull fehlgeschlagen, fahre fort." -ForegroundColor Yellow }
+    try {
+        git fetch origin
+        if ($BRANCH) {
+            Write-Host ("Wechsle auf Helper-Branch {0} ..." -f $BRANCH)
+            git checkout $BRANCH
+            git pull --ff-only origin $BRANCH
+        } else {
+            $currentBranch = (& git branch --show-current).Trim()
+            Write-Host ("Aktiver Branch: {0}" -f $currentBranch)
+            git pull --ff-only
+        }
+    } catch { Write-Host "git update fehlgeschlagen, fahre fort." -ForegroundColor Yellow }
+    Pop-Location
+}
+
+Push-Location $ROOT
+try {
+    $currentBranch = (& git branch --show-current).Trim()
+    $currentCommit = (& git rev-parse --short HEAD).Trim()
+    Write-Host ("Helper-Code: Branch {0}, Commit {1}" -f $currentBranch, $currentCommit) -ForegroundColor Cyan
+} finally {
     Pop-Location
 }
 

@@ -140,8 +140,8 @@ export function ModelingPanel({
               .pbip-Datei oben (kein neues, leeres Fenster verwenden!)
             </li>
             <li>
-              In Power BI Desktop: <strong>Daten abrufen → Business Central / OData</strong>{" "}
-              und die vorgeschlagenen Tabellen importieren
+              In Power BI Desktop: <strong>Daten abrufen</strong> und die Tabellen aus deiner
+              gewünschten Quelle importieren (z.B. Business Central, OData, Fabric, Excel oder SQL)
             </li>
             <li>
               <strong>Strg+S drücken</strong> – das ist der entscheidende Schritt. Erst beim
@@ -151,8 +151,8 @@ export function ModelingPanel({
             <li>
               Im Chat rechts: „Welche Tabellen sind aktuell geladen?" – viBI liest live aus dem
               PBI-Workspace und legt pro KPI eine passende Measure + Datumstabelle an. Beziehungen
-              werden NICHT automatisch erzeugt (das HTML-Dashboard kommt ohne aus, und sie sind
-              die häufigste Fehlerquelle).
+              werden im späteren PowerBI-Visuals-Pfad gezielt ergänzt; HTML-Dashboards kommen ohne
+              Modell-Joins aus.
             </li>
             <li>
               Klick „Modell fertig" sobald du zufrieden bist – führt dich ins Design.

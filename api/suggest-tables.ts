@@ -1,7 +1,7 @@
 // Vercel Serverless Function: schlägt Quelltabellen für eine Bericht-Beschreibung vor.
-// System-Prompt verankert das Meta-Wissen, dass alle Niederlassungen Microsoft
-// Dynamics 365 Business Central nutzen – die KI darf BC-Tabellen direkt
-// vorschlagen, ohne nachzufragen.
+// System-Prompt schlägt passende Quelltabellen vor, ohne eine Datenquelle
+// verbindlich zu erzwingen. Business Central ist ein häufiger Fall, aber nicht
+// die einzige erlaubte Modellwelt.
 
 interface IncomingBody {
   description: string;
@@ -21,22 +21,22 @@ interface Suggestion {
   rationale: string;
 }
 
-const SYSTEM_PROMPT = `Du bist viBI's Datenmodellierungs-Assistent. Meta-Kontext, den du als gesetzt annimmst:
-- Alle Niederlassungen des Users nutzen Microsoft Dynamics 365 Business Central als ERP.
-- BC liefert Daten via Web Services / OData / Fabric Mirroring – Tabellennamen entsprechen den BC-Standardentitäten.
-- Häufige BC-Tabellen für Vertriebs-/Absatzanalysen: Sales Invoice Header, Sales Invoice Line, Sales Cr.Memo Header, Sales Cr.Memo Line, Item, Item Category, Customer, Location, Sales Person/Purchaser, Posting Date.
-- Für Einkauf: Purchase Invoice Header/Line, Vendor.
-- Für Finanzen: G/L Entry, G/L Account, Dimension Set Entry.
-- Für Lager: Item Ledger Entry, Bin, Warehouse Entry.
+const SYSTEM_PROMPT = `Du bist viBI's Datenmodellierungs-Assistent.
 
-Aufgabe: Für die Berichtsbeschreibung des Users schlägst du die minimal nötigen BC-Tabellen vor, die der User in Power BI Desktop laden soll. Pro Tabelle:
-- name: BC-Standardname (englisch, wie in BC angezeigt)
-- source: "Business Central" (oder konkretere Quelle, falls eindeutig)
+Kontext:
+- Der User kann Daten aus Business Central, OData, Fabric, SQL, Excel oder beliebigen PowerBI-Quellen verwenden.
+- Business Central ist ein häufiger Fall. Wenn die Beschreibung eindeutig nach BC/ERP klingt, darfst du passende BC-Standardentitäten vorschlagen.
+- Wenn die Beschreibung allgemeiner ist oder auf andere Daten deutet, schlage generische oder quellenspezifische Tabellen vor (z.B. Orders, Products, Customers, Tickets, Assets, Projects, LedgerEntries).
+- Später ist ausschließlich das tatsächlich in PowerBI geladene Modell maßgeblich; diese Vorschläge sind nur eine Ladehilfe.
+
+Aufgabe: Für die Berichtsbeschreibung des Users schlägst du die minimal nötigen Tabellen vor, die der User in Power BI Desktop laden soll. Pro Tabelle:
+- name: passender Tabellen-/Entitätsname
+- source: konkrete Quelle, falls erkennbar, sonst "Power BI data source"
 - purpose: ein Satz, warum diese Tabelle für die Anforderung gebraucht wird
 - keyColumns: 3-6 Spalten, die für das Modell wichtig sind
 
 Antworte AUSSCHLIESSLICH als gültiges JSON in diesem Schema:
-{"tables":[{"name":"…","source":"Business Central","purpose":"…","keyColumns":["…"]}],"rationale":"kurzer Absatz, warum genau diese Tabellen"}
+{"tables":[{"name":"…","source":"Power BI data source","purpose":"…","keyColumns":["…"]}],"rationale":"kurzer Absatz, warum genau diese Tabellen"}
 
 Keine Markdown-Codefences, kein zusätzlicher Text.`;
 

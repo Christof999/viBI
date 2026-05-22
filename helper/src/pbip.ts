@@ -151,6 +151,18 @@ const PAGE_HEIGHT = 720;
 const HTML_VISUAL_TYPE =
   process.env.HTML_VISUAL_TYPE ?? "htmlContent443BE3AD55E043BF878BED274D3A6855";
 
+type NativeField =
+  | { kind: "measure"; table: string; name: string }
+  | { kind: "column"; table: string; name: string; dataType?: string };
+
+export interface NativePowerBIReportInput {
+  title: string;
+  subtitle?: string;
+  measures: { table: string; name: string }[];
+  slicers: { table: string; column: string; dataType?: string }[];
+  category?: { table: string; column: string; dataType?: string };
+}
+
 // Erzeugt einen page-fillenden Visual-Container für das HTML-Content-Visual,
 // dessen "Values"-Feld an das angegebene Measure gebunden wird.
 //
@@ -212,6 +224,285 @@ export function buildHtmlContentVisualContainer(args: {
       visualElements: [{ DataRoles: [{ Name: "Values", Projection: 0, isActive: true }] }],
       selects: [{ displayName: queryName, queryName, type: { underlyingType: 1, category: null } }],
     }),
+  };
+}
+
+function visualName(prefix: string, index: number): string {
+  return `vibi${prefix}${String(index).padStart(2, "0")}`;
+}
+
+function fieldQueryName(field: NativeField): string {
+  return `${field.table}.${field.kind === "measure" ? field.name : field.name}`;
+}
+
+function uniqueFields(fields: NativeField[]): NativeField[] {
+  const seen = new Set<string>();
+  return fields.filter((field) => {
+    const key = `${field.kind}:${field.table}.${field.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function sourceAliases(fields: NativeField[]) {
+  const tables = [...new Set(fields.map((field) => field.table))];
+  return tables.map((table, index) => ({
+    Name: `t${index}`,
+    Entity: table,
+    Type: 0,
+  }));
+}
+
+function buildNativeQuery(fieldsIn: NativeField[]) {
+  const fields = uniqueFields(fieldsIn);
+  const from = sourceAliases(fields);
+  const aliasByTable = new Map(from.map((source) => [source.Entity, source.Name]));
+  const select = fields.map((field) => {
+    const source = aliasByTable.get(field.table) ?? "t0";
+    const base = {
+      Expression: { SourceRef: { Source: source } },
+      Property: field.name,
+    };
+    return field.kind === "measure"
+      ? {
+          Measure: base,
+          Name: fieldQueryName(field),
+        }
+      : {
+          Column: base,
+          Name: fieldQueryName(field),
+        };
+  });
+  return { Version: 2, From: from, Select: select };
+}
+
+function fieldKey(field: NativeField): string {
+  return `${field.kind}:${field.table}.${field.name}`;
+}
+
+function buildDataTransforms(
+  fields: NativeField[],
+  projectionEntries: [string, NativeField[]][]
+) {
+  const indexByField = new Map(fields.map((field, index) => [fieldKey(field), index]));
+  const selects = uniqueFields(fields).map((field) => ({
+    displayName: field.name,
+    queryName: fieldQueryName(field),
+    type:
+      field.kind === "measure"
+        ? { underlyingType: 259, category: null }
+        : { underlyingType: field.dataType === "dateTime" ? 4 : 1, category: null },
+  }));
+  return {
+    objects: {},
+    projectionOrdering: Object.fromEntries(
+      projectionEntries.map(([role, roleFields]) => [
+        role,
+        roleFields.map((field) => indexByField.get(fieldKey(field)) ?? 0),
+      ])
+    ),
+    queryMetadata: {
+      Select: selects.map((select) => ({
+        Restatement: select.queryName,
+        Name: select.queryName,
+        Type: 1,
+      })),
+    },
+    visualElements: [
+      {
+        DataRoles: projectionEntries.flatMap(([role, roleFields]) =>
+          roleFields.map((field) => ({
+            Name: role,
+            Projection: indexByField.get(fieldKey(field)) ?? 0,
+            isActive: true,
+          }))
+        ),
+      },
+    ],
+    selects,
+  };
+}
+
+function buildNativeVisualContainer(args: {
+  name: string;
+  visualType: string;
+  x: number;
+  y: number;
+  z: number;
+  width: number;
+  height: number;
+  projections: Record<string, NativeField[]>;
+  objects?: Record<string, unknown>;
+}) {
+  const projectionEntries = Object.entries(args.projections);
+  const fields = uniqueFields(projectionEntries.flatMap(([, fieldsForRole]) => fieldsForRole));
+  const prototypeQuery = buildNativeQuery(fields);
+  const roleNames = projectionEntries.map(([role]) => role);
+  const projectionIndex = new Map(fields.map((field, index) => [fieldKey(field), index]));
+  const projections = Object.fromEntries(
+    projectionEntries.map(([role, roleFields]) => [
+      role,
+      roleFields.map((field) => ({
+        queryRef: fieldQueryName(field),
+        active: true,
+      })),
+    ])
+  );
+
+  return {
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    width: args.width,
+    height: args.height,
+    config: JSON.stringify({
+      name: args.name,
+      layouts: [
+        {
+          id: 0,
+          position: {
+            x: args.x,
+            y: args.y,
+            z: args.z,
+            width: args.width,
+            height: args.height,
+          },
+        },
+      ],
+      singleVisual: {
+        visualType: args.visualType,
+        projections,
+        prototypeQuery,
+        drillFilterOtherVisuals: true,
+        objects: args.objects ?? {},
+      },
+    }),
+    filters: "[]",
+    query: JSON.stringify({
+      Commands: [
+        {
+          SemanticQueryDataShapeCommand: {
+            Query: prototypeQuery,
+            Binding: {
+              Primary: {
+                Groupings: [
+                  {
+                    Projections: roleNames.flatMap((role) =>
+                      (args.projections[role] ?? []).map((field) =>
+                        projectionIndex.get(fieldKey(field)) ?? 0
+                      )
+                    ),
+                  },
+                ],
+              },
+              DataReduction: { DataVolume: 4, Primary: { Top: { Count: 1000 } } },
+              Version: 1,
+            },
+          },
+        },
+      ],
+    }),
+    dataTransforms: JSON.stringify(buildDataTransforms(fields, projectionEntries)),
+  };
+}
+
+function buildNativeReportJson(input: NativePowerBIReportInput) {
+  const cardMeasures = input.measures.slice(0, 4);
+  const primaryMeasure = cardMeasures[0] ?? input.measures[0];
+  const category = input.category;
+  const visualContainers: unknown[] = [];
+  let z = 0;
+
+  input.slicers.slice(0, 3).forEach((slicer, index) => {
+    visualContainers.push(
+      buildNativeVisualContainer({
+        name: visualName("Slicer", index + 1),
+        visualType: "slicer",
+        x: 24 + index * 194,
+        y: 24,
+        z: z++,
+        width: 178,
+        height: 86,
+        projections: {
+          Values: [{ kind: "column", table: slicer.table, name: slicer.column, dataType: slicer.dataType }],
+        },
+      })
+    );
+  });
+
+  cardMeasures.forEach((measure, index) => {
+    visualContainers.push(
+      buildNativeVisualContainer({
+        name: visualName("Card", index + 1),
+        visualType: "card",
+        x: 24 + index * 303,
+        y: 126,
+        z: z++,
+        width: 286,
+        height: 118,
+        projections: {
+          Values: [{ kind: "measure", table: measure.table, name: measure.name }],
+        },
+      })
+    );
+  });
+
+  if (category && primaryMeasure) {
+    visualContainers.push(
+      buildNativeVisualContainer({
+        name: visualName("Bar", 1),
+        visualType: "clusteredBarChart",
+        x: 24,
+        y: 268,
+        z: z++,
+        width: 612,
+        height: 404,
+        projections: {
+          Category: [{ kind: "column", table: category.table, name: category.column, dataType: category.dataType }],
+          Y: [{ kind: "measure", table: primaryMeasure.table, name: primaryMeasure.name }],
+        },
+      })
+    );
+  }
+
+  if (category && input.measures.length > 0) {
+    visualContainers.push(
+      buildNativeVisualContainer({
+        name: visualName("Table", 1),
+        visualType: "tableEx",
+        x: 660,
+        y: 268,
+        z: z++,
+        width: 596,
+        height: 404,
+        projections: {
+          Values: [
+            { kind: "column", table: category.table, name: category.column, dataType: category.dataType },
+            ...input.measures.slice(0, 5).map((measure) => ({
+              kind: "measure" as const,
+              table: measure.table,
+              name: measure.name,
+            })),
+          ],
+        },
+      })
+    );
+  }
+
+  return {
+    config: '{"version":"5.43","themeCollection":{"customTheme":{"name":"viBI"}}}',
+    layoutOptimization: 0,
+    sections: [
+      {
+        name: "Page1",
+        displayName: input.title || "Übersicht",
+        displayOption: 1,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+        visualContainers,
+      },
+    ],
   };
 }
 
@@ -373,6 +664,23 @@ export function applyFullPageHTML(
       2
     )
   );
+  return reportJsonPath;
+}
+
+export function applyNativePowerBIReport(
+  pbipPath: string,
+  input: NativePowerBIReportInput
+): string {
+  const projectDir = pbipPath.replace(/[\\/][^\\/]+\.pbip$/, "");
+  const projName = pbipPath.split(/[\\/]/).pop()!.replace(/\.pbip$/, "");
+  const reportJsonPath = join(projectDir, `${projName}.Report`, "report.json");
+  if (!existsSync(reportJsonPath)) {
+    throw new Error(`report.json nicht gefunden unter ${reportJsonPath}`);
+  }
+  if (input.measures.length === 0) {
+    throw new Error("Mindestens eine Measure ist erforderlich, um PowerBI-Visuals zu binden.");
+  }
+  writeFileSync(reportJsonPath, JSON.stringify(buildNativeReportJson(input), null, 2));
   return reportJsonPath;
 }
 
